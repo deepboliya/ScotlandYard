@@ -48,6 +48,12 @@ python main.py
 # Play as Mr. X (click green nodes to move)
 python main.py --mode play
 
+# Play as detectives against Mr. X policy
+python main.py --mode play-detective
+
+# Play as detectives against a stored dumped policy
+python main.py --mode play-detective --policy-file x_1_d_5_10.json
+
 # Custom starting positions
 python main.py --mrx 1 --detectives 5 10
 
@@ -56,7 +62,49 @@ python main.py --mrx 9 --detectives 3 6 14
 
 # Text-only mode (no GUI)
 python main.py --no-viz
+
+# Exhaustive adversarial solve (all detective strategies)
+python main.py --mode solve
+
+# Save the full Mr. X state->move policy map
+python main.py --mode solve --dump-policy policy.json
+
+# Play from stored policy; configuration is read from JSON
+# (--mrx/--detectives/--max-rounds are ignored)
+python main.py --mode play-detective --policy-file policy.json
 ```
+
+## Policy JSON Format
+
+Dumped policy files now include both the policy and the exact board
+configuration they were solved for:
+
+```json
+{
+  "format": "scotlandyard-policy-v2",
+  "board": "top-right-simple-v1",
+  "config": {
+    "mrx_start": 1,
+    "detective_starts": [5, 10],
+    "max_rounds": 4
+  },
+  "solver": {
+    "forced_escape": true,
+    "states_evaluated": 630,
+    "policy_size": 113
+  },
+  "policy": {
+    "r=0|p=mrx|x=1|d=5,10": 8
+  }
+}
+```
+
+When `--policy-file` is used, startup configuration is loaded from the
+JSON `config` block.
+
+If you explicitly pass `--mrx`, `--detectives`, or `--max-rounds` together
+with `--policy-file`, they must exactly match the JSON config or the
+program exits with an error.
 
 ## Controls
 
@@ -96,3 +144,22 @@ engine = GameEngine(board, state,
 * Mr. X **cannot** move to a detective's node.
 * If Mr. X has no valid move he is caught.
 * If Mr. X survives `max_rounds` rounds (default 15) he wins.
+
+## Exhaustive Mr. X Strategy Search
+
+Use `--mode solve` to compute whether Mr. X has a policy that guarantees
+escape against **every possible detective strategy**.
+
+This is solved as a turn-based adversarial game:
+
+* On Mr. X turns: existential choice (`any` move can be chosen).
+* On detective turns: universal choice (`all` detective moves must still
+  allow Mr. X to escape).
+
+So the solver checks:
+
+$$
+\exists\,\pi_{X}\;\forall\,\pi_{D}:\;\text{Mr. X escapes}
+$$
+
+without explicitly enumerating huge detective policy tables.
