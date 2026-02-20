@@ -287,7 +287,7 @@ def main() -> None:
     # ── text-only mode ──────────────────────────────────────────────────
     if args.no_viz:
         if loaded_policy is not None:
-            mrx_strat = SerializedPolicyStrategy(loaded_policy)
+            mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
         det_strats = [
@@ -336,13 +336,13 @@ def main() -> None:
 
     elif args.mode == "play-detective":
         if loaded_policy is not None:
-            mrx_strat = SerializedPolicyStrategy(loaded_policy)
+            mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             print("Using stored Mr. X policy from file.")
         else:
             solve = solve_mrx_forced_escape(board, state)
             if solve.forced_escape:
                 print("Using solved policy strategy for Mr. X (forced escape exists).")
-                mrx_strat = PolicyStrategy(solve.policy)
+                mrx_strat = PolicyStrategy(solve.policy, strict=True)
             else:
                 print("No forced escape policy found; using random Mr. X strategy.")
                 mrx_strat = RandomStrategy(seed=args.seed)
@@ -369,13 +369,13 @@ def main() -> None:
 
     else:
         if loaded_policy is not None:
-            mrx_strat = SerializedPolicyStrategy(loaded_policy)
+            mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             print("Using stored Mr. X policy from file.")
         else:
             solve = solve_mrx_forced_escape(board, state)
             if solve.forced_escape:
                 print("Using solved policy strategy for Mr. X (forced escape exists).")
-                mrx_strat = PolicyStrategy(solve.policy)
+                mrx_strat = PolicyStrategy(solve.policy, strict=True)
             else:
                 print("No forced escape policy found; using random Mr. X strategy.")
                 mrx_strat = RandomStrategy(seed=args.seed)
