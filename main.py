@@ -6,7 +6,7 @@ Usage examples
     python main.py
 
     # Play as Mr. X (click to move)
-    python main.py --mode play
+    python main.py --mode play-mrx
 
     # Custom starting positions
     python main.py --mrx 1 --detectives 5 10
@@ -99,16 +99,37 @@ def _cli_flag_present(flag: str) -> bool:
     return flag in sys.argv[1:]
 
 
+def _describe_strategy(strategy) -> str:
+    if isinstance(strategy, HumanStrategy):
+        return "Human (click)"
+    if isinstance(strategy, SerializedPolicyStrategy):
+        return "Stored policy (JSON)"
+    if isinstance(strategy, PolicyStrategy):
+        return "Solved policy"
+    if isinstance(strategy, RandomStrategy):
+        return "Random"
+    return strategy.__class__.__name__
+
+
+def _describe_detective_strategies(det_strats: list) -> str:
+    if not det_strats:
+        return "None"
+    labels = [_describe_strategy(s) for s in det_strats]
+    if all(lbl == labels[0] for lbl in labels):
+        return f"{labels[0]} ×{len(labels)}"
+    return "; ".join(f"D{i}: {lbl}" for i, lbl in enumerate(labels))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scotland Yard — top-right board (nodes 1-20)"
     )
     parser.add_argument(
         "--mode",
-        choices=["auto", "play", "play-detective", "solve"],
+        choices=["auto", "play-mrx", "play-detective", "solve"],
         default="auto",
         help=(
-            "auto: watch AI play. play: play as Mr. X. "
+            "auto: watch AI play. play-mrx: play as Mr. X. "
             "play-detective: play as detectives. "
             "solve: exhaustive adversarial solve"
         ),
@@ -142,6 +163,9 @@ def main() -> None:
 
     if args.policy_file and args.mode == "solve":
         print("Error: --policy-file cannot be used with --mode solve.")
+        sys.exit(1)
+    if args.policy_file and args.mode == "play-mrx":
+        print("Error: --policy-file cannot be used with --mode play-mrx (you are Mr. X).")
         sys.exit(1)
 
     loaded_policy: dict[str, int] | None = None
@@ -275,7 +299,7 @@ def main() -> None:
     # ── graphical modes ─────────────────────────────────────────────────
     from visualization.visualizer import GameVisualizer
 
-    if args.mode == "play":
+    if args.mode == "play-mrx":
         # HumanStrategy for Mr. X — move_selector wired up below
         mrx_strat = HumanStrategy()
         det_strats = [
@@ -284,7 +308,12 @@ def main() -> None:
         ]
         engine = GameEngine(board, state, mrx_strat, det_strats,
                             on_move=_log_move)
-        viz = GameVisualizer(engine)
+        viz = GameVisualizer(
+            engine,
+            mode_label="Play as Mr. X",
+            mrx_policy_label=_describe_strategy(mrx_strat),
+            detective_policy_label=_describe_detective_strategies(det_strats),
+        )
 
         # connect click-to-move
         mrx_strat.move_selector = viz.wait_for_click
@@ -312,7 +341,12 @@ def main() -> None:
         det_strats = [HumanStrategy() for _ in range(state.num_detectives)]
         engine = GameEngine(board, state, mrx_strat, det_strats,
                             on_move=_log_move)
-        viz = GameVisualizer(engine)
+        viz = GameVisualizer(
+            engine,
+            mode_label="Play as Detectives",
+            mrx_policy_label=_describe_strategy(mrx_strat),
+            detective_policy_label=_describe_detective_strategies(det_strats),
+        )
 
         for strat in det_strats:
             strat.move_selector = viz.wait_for_click
@@ -343,7 +377,12 @@ def main() -> None:
         ]
         engine = GameEngine(board, state, mrx_strat, det_strats,
                             on_move=_log_move)
-        viz = GameVisualizer(engine)
+        viz = GameVisualizer(
+            engine,
+            mode_label="Observer",
+            mrx_policy_label=_describe_strategy(mrx_strat),
+            detective_policy_label=_describe_detective_strategies(det_strats),
+        )
 
         print("╔══════════════════════════════════════════╗")
         print("║   Scotland Yard — Observer Mode          ║")

@@ -41,8 +41,18 @@ class GameVisualizer:
     CLR_EDGE       = "#bdc3c7"
     CLR_BG         = "#fafafa"
 
-    def __init__(self, engine: GameEngine, figsize: tuple = (12, 10)):
+    def __init__(
+        self,
+        engine: GameEngine,
+        figsize: tuple = (12, 10),
+        mode_label: str = "Unknown",
+        mrx_policy_label: str = "Unknown",
+        detective_policy_label: str = "Unknown",
+    ):
         self.engine = engine
+        self.mode_label = mode_label
+        self.mrx_policy_label = mrx_policy_label
+        self.detective_policy_label = detective_policy_label
 
         # networkx graph (purely for drawing)
         self.G = nx.Graph()
@@ -158,6 +168,24 @@ class GameVisualizer:
             0.02, -0.02, info,
             transform=self.ax.transAxes, ha="left",
             fontsize=9, color="gray",
+        )
+
+        # policy/mode panel
+        policy_text = (
+            f"Mode: {self.mode_label}\n"
+            f"Mr. X policy: {self.mrx_policy_label}\n"
+            f"Detective policy: {self.detective_policy_label}"
+        )
+        self.ax.text(
+            0.02,
+            0.98,
+            policy_text,
+            transform=self.ax.transAxes,
+            ha="left",
+            va="top",
+            fontsize=9,
+            color="#2c3e50",
+            bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "alpha": 0.88, "edgecolor": "#d0d7de"},
         )
 
         # help bar
