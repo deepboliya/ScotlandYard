@@ -10,6 +10,7 @@ Two usage modes
 
 from __future__ import annotations
 
+import math
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 import networkx as nx
@@ -58,6 +59,8 @@ class GameVisualizer:
         self.G = nx.Graph()
         self.G.add_nodes_from(engine.board.nodes)
         self.G.add_edges_from(engine.board.edges)
+        self._draw_pos = self._build_draw_positions()
+        self._pick_threshold = self._estimate_pick_threshold(self._draw_pos)
 
         # interaction state
         self._valid_moves: List[int] = []
@@ -78,16 +81,60 @@ class GameVisualizer:
 
     # ── drawing ─────────────────────────────────────────────────────────
 
+    def _build_draw_positions(self):
+        """Create readable positions; untangle larger graphs automatically."""
+        board_pos = self.engine.board.positions
+        has_all_positions = all(n in board_pos for n in self.engine.board.nodes)
+        n_nodes = len(self.engine.board.nodes)
+
+        # Keep handcrafted placement for smaller boards.
+        if has_all_positions and n_nodes <= 20:
+            return board_pos
+
+        # Larger boards: spring layout generally reduces overlap/crossings.
+        init = board_pos if has_all_positions else None
+        k = 1.2 / max(1.0, math.sqrt(n_nodes))
+        return nx.spring_layout(
+            self.G,
+            pos=init,
+            seed=11,
+            iterations=400,
+            k=k,
+        )
+
+    @staticmethod
+    def _estimate_pick_threshold(pos) -> float:
+        """Adaptive click radius from nearest-neighbour spacing."""
+        pts = list(pos.values())
+        if len(pts) < 2:
+            return 0.6
+
+        nearest_distances: List[float] = []
+        for i, (x1, y1) in enumerate(pts):
+            best = float("inf")
+            for j, (x2, y2) in enumerate(pts):
+                if i == j:
+                    continue
+                d = ((x1 - x2) ** 2 + (y1 - y2) ** 2) ** 0.5
+                if d < best:
+                    best = d
+            nearest_distances.append(best)
+
+        nearest_distances.sort()
+        median = nearest_distances[len(nearest_distances) // 2]
+        return max(0.08, min(0.65, median * 0.45))
+
     def draw(self) -> None:
         """Render the current game state onto the axes."""
         self.ax.clear()
         s = self.engine.state
-        pos = self.engine.board.positions
+        pos = self._draw_pos
 
         # edges
         nx.draw_networkx_edges(
             self.G, pos, ax=self.ax,
-            edge_color=self.CLR_EDGE, width=2.5, alpha=0.7,
+            edge_color=self.CLR_EDGE, width=1.8, alpha=0.55,
+            connectionstyle="arc3,rad=0.06",
         )
 
         # categorise nodes
@@ -224,10 +271,12 @@ class GameVisualizer:
 
     # ── node picking ────────────────────────────────────────────────────
 
-    def _closest_node(self, x: float, y: float, threshold: float = 0.6):
+    def _closest_node(self, x: float, y: float, threshold: float | None = None):
         """Return the node closest to *(x, y)*, or ``None``."""
+        if threshold is None:
+            threshold = self._pick_threshold
         best, best_d = None, float("inf")
-        for node, (nx_, ny) in self.engine.board.positions.items():
+        for node, (nx_, ny) in self._draw_pos.items():
             d = ((x - nx_) ** 2 + (y - ny) ** 2) ** 0.5
             if d < best_d:
                 best, best_d = node, d

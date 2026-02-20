@@ -50,12 +50,14 @@ class Board:
 
 
 def create_top_right_board() -> Board:
-    """Top-right portion of the real Scotland Yard board (nodes 1-20).
+    """Extended top-right style board with local + long-range links.
 
-    Only edges whose *both* endpoints lie in {1, …, 20} are kept.
-    Transport types are ignored — every edge is a simple connection.
+    This starts from the original 1-20 subgraph and adds more nodes
+    with a few far-reaching "underground-like" edges. Transport types
+    are still ignored — every edge is a simple connection.
     """
     edges = [
+        # base local graph (original 1-20)
         (1, 8),   (1, 9),
         (2, 10),  (2, 20),
         (3, 4),   (3, 11),  (3, 12),
@@ -69,9 +71,23 @@ def create_top_right_board() -> Board:
         (13, 14),
         (14, 15),
         (15, 16),
+
+        # extended local region (21-35)
+        (20, 21), (21, 22), (22, 23), (23, 24),
+        (24, 25), (25, 26), (26, 27), (27, 28),
+        (19, 29), (29, 30), (30, 31), (31, 32),
+        (30, 33), (31, 34), (32, 35),
+        (33, 34), (34, 35),
+        (11, 23), (12, 25), (2, 24), (21, 29),
+        (25, 30), (26, 31), (28, 32),
+
+        # far-reaching ("underground-like") connections
+        (1, 24), (2, 29), (3, 28), (5, 30),
+        (6, 22), (9, 27), (12, 33), (14, 34),
+        (17, 31), (18, 35),
     ]
 
-    # Approximate (x, y) positions matching the real board layout.
+    # Approximate (x, y) positions.
     # x → right, y → up.
     positions: Dict[int, Tuple[float, float]] = {
         1:  (4.0, 10.0),
@@ -94,6 +110,23 @@ def create_top_right_board() -> Board:
         15: (2.5, 3.5),
         16: (1.5, 4.0),
         5:  (0.5, 4.5),
+
+        # extended area to the right
+        21: (9.0, 9.0),
+        22: (10.2, 8.1),
+        23: (11.4, 7.2),
+        24: (12.6, 8.3),
+        25: (13.0, 6.4),
+        26: (14.0, 5.6),
+        27: (14.8, 7.0),
+        28: (15.7, 6.0),
+        29: (9.6, 7.3),
+        30: (10.8, 6.0),
+        31: (12.0, 5.0),
+        32: (13.6, 4.4),
+        33: (10.7, 4.7),
+        34: (12.0, 3.6),
+        35: (13.5, 3.2),
     }
 
     return Board(edges, positions)

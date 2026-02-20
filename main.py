@@ -31,6 +31,9 @@ from strategies.policy_strategy import PolicyStrategy, SerializedPolicyStrategy
 from solver.exhaustive_solver import SolverState, solve_mrx_forced_escape
 
 
+BOARD_ID = "top-right-extended-v2"
+
+
 def _log_move(player_id: str, from_node: int, to_node: int) -> None:
     """Simple console logger for every move."""
     label = player_id.replace("_", " ").title()
@@ -61,6 +64,12 @@ def _load_policy_bundle(path: str) -> tuple[dict[str, int], int, list[int], int]
         raise ValueError(
             "Unsupported policy JSON format. Regenerate using "
             "--mode solve --dump-policy <file>."
+        )
+
+    board_id = data.get("board")
+    if board_id is not None and board_id != BOARD_ID:
+        raise ValueError(
+            f"Policy board '{board_id}' is incompatible with current board '{BOARD_ID}'."
         )
 
     config: Any = data["config"]
@@ -256,7 +265,7 @@ def main() -> None:
             }
             serialised = {
                 "format": "scotlandyard-policy-v2",
-                "board": "top-right-simple-v1",
+                "board": BOARD_ID,
                 "config": {
                     "mrx_start": state.mrx_position,
                     "detective_starts": state.detective_positions,

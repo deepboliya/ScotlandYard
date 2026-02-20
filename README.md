@@ -5,9 +5,12 @@ A simplified Scotland Yard game environment for developing and testing
 
 ## Board
 
-Uses the **top-right portion** of the real Scotland Yard board
-(nodes 1–20, 20 edges).  Transport types are ignored for now — every
-edge is a simple connection.
+This project uses an **extended top-right board** with both short-range
+links and a few long-range connections to mimic Underground jumps.
+
+- Nodes: **1–35**
+- Mix of local and long-range edges
+- Single edge type for now (no taxi/bus/underground ticket types yet)
 
 ```
         1
@@ -64,7 +67,7 @@ python main.py --mode play-mrx
 python main.py --mode play-detective
 
 # Play as detectives against a stored policy file
-python main.py --mode play-detective --policy-file policy_v2.json
+python main.py --mode play-detective --policy-file policy_v3.json
 ```
 
 ### 2) Text-only mode
@@ -101,7 +104,7 @@ Dumped files include both solved policy and exact solve configuration:
 ```json
 {
   "format": "scotlandyard-policy-v2",
-  "board": "top-right-simple-v1",
+  "board": "top-right-extended-v2",
   "config": {
     "mrx_start": 1,
     "detective_starts": [5, 10],
