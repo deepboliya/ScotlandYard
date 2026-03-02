@@ -59,33 +59,6 @@ def _valid_moves(
     return sorted(n for n in board.neighbors(node) if n not in excluded)
 
 
-def _is_terminal(
-    board: Board,
-    state: SolverState,
-    max_rounds: int,
-) -> Tuple[bool, bool]:
-    """Return ``(is_terminal, mrx_wins)``."""
-    # Caught immediately
-    if state.mrx_position in state.detective_positions:
-        return True, False
-
-    # Mr. X survived all rounds
-    if state.round_number >= max_rounds and state.current_player == "mrx":
-        return True, True
-
-    # Mr. X trapped on his turn
-    if state.current_player == "mrx":
-        legal = _valid_moves(
-            board,
-            state.mrx_position,
-            state.detective_positions,
-        )
-        if not legal:
-            return True, False
-
-    return False, False
-
-
 def _next_states(board: Board, state: SolverState) -> List[Tuple[int, SolverState]]:
     """Enumerate legal transitions as ``(move, next_state)``.
 
@@ -119,9 +92,7 @@ def _next_states(board: Board, state: SolverState) -> List[Tuple[int, SolverStat
     idx = int(state.current_player.split("_")[1])
     det_positions = list(state.detective_positions)
     from_node = det_positions[idx]
-    occupied_by_other_detectives = [
-        det_positions[i] for i in range(len(det_positions)) if i != idx
-    ]
+    occupied_by_other_detectives = det_positions[:idx] + det_positions[idx + 1:]
 
     legal = _valid_moves(board, from_node, occupied_by_other_detectives)
     if not legal:
@@ -206,6 +177,8 @@ def solve_mrx_forced_escape(
                 if d > best_depth:
                     best_depth = d
                     best_move = move
+                if best_depth == max_rounds:
+                    break  # can't do better than surviving all rounds
 
             policy[state] = best_move
             memo[state] = best_depth
@@ -219,14 +192,16 @@ def solve_mrx_forced_escape(
             if d < worst_depth:
                 worst_depth = d
                 worst_move = move
+            if worst_depth == state.round_number:
+                break  # instant capture — can't do better
 
         detective_policy[state] = worst_move
         memo[state] = worst_depth
         return worst_depth
 
-    depth = get_survival_depth(start)
+    guaranteed_survival = get_survival_depth(start)
     return ExhaustiveResult(
-        forced_escape=(depth >= max_rounds),
+        forced_escape=(guaranteed_survival >= max_rounds),
         policy=policy,
         detective_policy=detective_policy,
         survival_depths=memo,
