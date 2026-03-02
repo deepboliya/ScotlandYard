@@ -35,11 +35,38 @@ from solver.exhaustive_solver import SolverState, solve_mrx_forced_escape
 BOARD_ID = "top-right-extended-v2"
 
 
-def _log_move(player_id: str, from_node: int, to_node: int) -> None:
-    """Simple console logger for every move."""
-    label = player_id.replace("_", " ").title()
-    arrow = "→" if from_node != to_node else "⊘ (stuck)"
-    print(f"  {label}: {from_node} {arrow} {to_node}")
+def _lookup_survival_depth(state: GameState, survival_depths: dict | None) -> int | None:
+    """Look up survival depth exactly matching the given game state."""
+    if survival_depths is None:
+        return None
+    key = SolverState(
+        round_number=state.round_number,
+        current_player=state.current_player,
+        mrx_position=state.mrx_position,
+        detective_positions=tuple(sorted(state.detective_positions)),
+    )
+    return survival_depths.get(key)
+
+
+def _make_move_logger(state: GameState, survival_depths: dict | None = None):
+    """Return an *on_move* callback that prints round & survival depth."""
+
+    def _log_move(player_id: str, from_node: int, to_node: int) -> None:
+        label = player_id.replace("_", " ").title()
+        arrow = "→" if from_node != to_node else "⊘ (stuck)"
+
+        parts = [f"R{state.round_number:>2}"]
+        depth = _lookup_survival_depth(state, survival_depths)
+        if depth is not None:
+            remaining = depth - state.round_number
+            parts.append(f"SD={depth}(+{remaining})")
+        elif survival_depths is not None:
+            parts.append("SD=?")
+
+        tag = " | ".join(parts)
+        print(f"  [{tag}] {label}: {from_node} {arrow} {to_node}")
+
+    return _log_move
 
 
 def _state_to_key(state: SolverState) -> str:
@@ -309,8 +336,17 @@ def main() -> None:
 
     # ── text-only mode ──────────────────────────────────────────────────
     if args.no_viz:
+        # Run solver to get survival depths for the move log
+        t0 = perf_counter()
+        solve = solve_mrx_forced_escape(board, state)
+        solve_time_s = perf_counter() - t0
+        print(f"Solver time: {solve_time_s:.6f} s")
+        survival_depths = solve.survival_depths
+
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
+        elif solve.forced_escape:
+            mrx_strat = PolicyStrategy(solve.policy, strict=True)
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
         if loaded_det_policy:
@@ -321,8 +357,9 @@ def main() -> None:
             )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
+        log = _make_move_logger(state, survival_depths)
         engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=_log_move)
+                            on_move=log)
 
         print(f"Board: {board}")
         print(f"Mr. X starts at {state.mrx_position}  "
@@ -353,8 +390,9 @@ def main() -> None:
             )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
+        log = _make_move_logger(state)
         engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=_log_move)
+                            on_move=log)
         viz = GameVisualizer(
             engine,
             mode_label="Play as Mr. X",
@@ -391,8 +429,9 @@ def main() -> None:
             mrx_strat = RandomStrategy(seed=args.seed)
 
         det_strat = HumanStrategy()
+        log = _make_move_logger(state, survival_depths)
         engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=_log_move)
+                            on_move=log)
         viz = GameVisualizer(
             engine,
             mode_label="Play as Detectives",
@@ -436,8 +475,9 @@ def main() -> None:
             )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
+        log = _make_move_logger(state, survival_depths)
         engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=_log_move)
+                            on_move=log)
         viz = GameVisualizer(
             engine,
             mode_label="Observer",

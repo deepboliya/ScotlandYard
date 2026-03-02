@@ -313,25 +313,45 @@ class GameVisualizer:
     # ── survival depth lookup ────────────────────────────────────────────
 
     def _lookup_survival_depth(self, s) -> int | None:
-        """Look up the Mr. X survival depth for the current game state."""
+        """Look up the Mr. X survival depth for the current game state.
+        
+        The solver stores states as (round, player, mrx_pos, det_pos).
+        
+        After a move completes, the engine state matches the solver exactly.
+        During interactive input (waiting for Mr. X to choose), the engine
+        has already incremented round_number but position is still old,
+        so we fall back to rn-1 if exact match fails.
+        """
         if self.survival_depths is None:
             return None
-        # The engine bumps round_number at the start of _step_mrx
-        # (before Mr. X chooses), but the solver records Mr. X states
-        # at the pre-increment round.  We try with the offset first,
-        # then without, to handle both the initial draw (round=0,
-        # no bump yet) and mid-game draws (round already bumped).
+
         rn = s.round_number
-        for adj in ([rn - 1, rn] if s.current_player == "mrx" else [rn]):
-            key = SolverState(
-                round_number=adj,
-                current_player=s.current_player,
+        det_pos = tuple(sorted(s.detective_positions))
+
+        # Always try exact match first
+        key = SolverState(
+            round_number=rn,
+            current_player=s.current_player,
+            mrx_position=s.mrx_position,
+            detective_positions=det_pos,
+        )
+        depth = self.survival_depths.get(key)
+        if depth is not None:
+            return depth
+
+        # Fallback: during interactive Mr. X input, engine round is +1
+        # but position is still old. Try rn-1.
+        if s.current_player == "mrx" and rn > 0:
+            key_adj = SolverState(
+                round_number=rn - 1,
+                current_player="mrx",
                 mrx_position=s.mrx_position,
-                detective_positions=tuple(s.detective_positions),
+                detective_positions=det_pos,
             )
-            depth = self.survival_depths.get(key)
+            depth = self.survival_depths.get(key_adj)
             if depth is not None:
                 return depth
+
         return None
 
     # Sentinel: policy is active but state not found
@@ -345,16 +365,23 @@ class GameVisualizer:
         """
         if self.hint_policy is None:
             return None
+
         rn = s.round_number
-        det_str = ",".join(map(str, s.detective_positions))
-        for adj in ([rn - 1, rn] if s.current_player == "mrx" else [rn]):
-            key = (
-                f"r={adj}|p={s.current_player}|"
-                f"x={s.mrx_position}|d={det_str}"
-            )
-            move = self.hint_policy.get(key)
+        det_str = ",".join(map(str, sorted(s.detective_positions)))
+
+        # Try exact match first
+        key = f"r={rn}|p={s.current_player}|x={s.mrx_position}|d={det_str}"
+        move = self.hint_policy.get(key)
+        if move is not None:
+            return move
+
+        # Fallback for interactive Mr. X input phase
+        if s.current_player == "mrx" and rn > 0:
+            key_adj = f"r={rn - 1}|p=mrx|x={s.mrx_position}|d={det_str}"
+            move = self.hint_policy.get(key_adj)
             if move is not None:
                 return move
+
         return self._HINT_MISSING
 
     # ── node picking ────────────────────────────────────────────────────
