@@ -48,10 +48,10 @@ def _state_to_key(state: SolverState) -> str:
     )
 
 
-def _load_policy_bundle(path: str) -> tuple[dict[str, int], int, list[int], int]:
+def _load_policy_bundle(path: str) -> tuple[dict[str, int], dict[str, int], int, list[int], int]:
     """Load policy + board configuration from JSON.
 
-    Returns ``(policy, mrx_start, detective_starts, max_rounds)``.
+    Returns ``(mrx_policy, detective_policy, mrx_start, detective_starts, max_rounds)``.
     """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -74,6 +74,7 @@ def _load_policy_bundle(path: str) -> tuple[dict[str, int], int, list[int], int]
 
     config: Any = data["config"]
     policy_obj: Any = data["policy"]
+    det_policy_obj: Any = data.get("detective_policy", {})
 
     if not isinstance(config, dict):
         raise ValueError("Policy JSON field 'config' must be an object.")
@@ -93,15 +94,20 @@ def _load_policy_bundle(path: str) -> tuple[dict[str, int], int, list[int], int]
     if not isinstance(max_rounds, int):
         raise ValueError("config.max_rounds must be an integer.")
 
-    out: dict[str, int] = {}
+    mrx_out: dict[str, int] = {}
     for k, v in policy_obj.items():
-        if not isinstance(k, str):
-            continue
-        if isinstance(v, int):
-            out[k] = v
-    if not out:
-        raise ValueError("Policy JSON has no valid entries.")
-    return out, mrx_start, detective_starts, max_rounds
+        if isinstance(k, str) and isinstance(v, int):
+            mrx_out[k] = v
+    if not mrx_out:
+        raise ValueError("Policy JSON has no valid Mr. X policy entries.")
+
+    det_out: dict[str, int] = {}
+    if isinstance(det_policy_obj, dict):
+        for k, v in det_policy_obj.items():
+            if isinstance(k, str) and isinstance(v, int):
+                det_out[k] = v
+
+    return mrx_out, det_out, mrx_start, detective_starts, max_rounds
 
 
 def _cli_flag_present(flag: str) -> bool:
@@ -155,9 +161,8 @@ def main() -> None:
                         help="Run without visualisation (text only)")
     parser.add_argument(
         "--dump-policy",
-        type=str,
-        default=None,
-        help="Optional JSON file to write solved Mr. X state->move policy",
+        action="store_true",
+        help="Write solved Mr. X policy to auto-named JSON file (xX_dX_X_rX.json)",
     )
     parser.add_argument(
         "--policy-file",
@@ -173,11 +178,9 @@ def main() -> None:
     if args.policy_file and args.mode == "solve":
         print("Error: --policy-file cannot be used with --mode solve.")
         sys.exit(1)
-    if args.policy_file and args.mode == "play-mrx":
-        print("Error: --policy-file cannot be used with --mode play-mrx (you are Mr. X).")
-        sys.exit(1)
 
     loaded_policy: dict[str, int] | None = None
+    loaded_det_policy: dict[str, int] | None = None
     mrx_start = args.mrx
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
@@ -190,6 +193,7 @@ def main() -> None:
 
             (
                 loaded_policy,
+                loaded_det_policy,
                 mrx_start,
                 detective_starts,
                 max_rounds,
@@ -259,9 +263,15 @@ def main() -> None:
             print(f"Recommended first move for Mr. X: {first_move}")
 
         if args.dump_policy:
+            det_str = "_".join(map(str, state.detective_positions))
+            dump_path = f"x{state.mrx_position}_d{det_str}_r{state.max_rounds}.json"
             serialised_policy = {
                 _state_to_key(k): v
                 for k, v in result.policy.items()
+            }
+            serialised_det_policy = {
+                _state_to_key(k): v
+                for k, v in result.detective_policy.items()
             }
             serialised = {
                 "format": "scotlandyard-policy-v2",
@@ -275,12 +285,14 @@ def main() -> None:
                     "forced_escape": result.forced_escape,
                     "states_evaluated": result.states_evaluated,
                     "policy_size": len(result.policy),
+                    "detective_policy_size": len(result.detective_policy),
                 },
                 "policy": serialised_policy,
+                "detective_policy": serialised_det_policy,
             }
-            with open(args.dump_policy, "w", encoding="utf-8") as f:
+            with open(dump_path, "w", encoding="utf-8") as f:
                 json.dump(serialised, f, indent=2, sort_keys=True)
-            print(f"Policy written to: {args.dump_policy}")
+            print(f"Policy written to: {dump_path}")
 
         return
 
@@ -290,10 +302,16 @@ def main() -> None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
-        det_strats = [
-            RandomStrategy(seed=(args.seed or 0) + i + 1)
-            for i in range(state.num_detectives)
-        ]
+        if loaded_det_policy:
+            det_strats = [
+                SerializedPolicyStrategy(loaded_det_policy, strict=False)
+                for _ in range(state.num_detectives)
+            ]
+        else:
+            det_strats = [
+                RandomStrategy(seed=(args.seed or 0) + i + 1)
+                for i in range(state.num_detectives)
+            ]
         engine = GameEngine(board, state, mrx_strat, det_strats,
                             on_move=_log_move)
 
@@ -311,10 +329,16 @@ def main() -> None:
     if args.mode == "play-mrx":
         # HumanStrategy for Mr. X — move_selector wired up below
         mrx_strat = HumanStrategy()
-        det_strats = [
-            RandomStrategy(seed=(args.seed or 0) + i + 1)
-            for i in range(state.num_detectives)
-        ]
+        if loaded_det_policy:
+            det_strats = [
+                SerializedPolicyStrategy(loaded_det_policy, strict=False)
+                for _ in range(state.num_detectives)
+            ]
+        else:
+            det_strats = [
+                RandomStrategy(seed=(args.seed or 0) + i + 1)
+                for i in range(state.num_detectives)
+            ]
         engine = GameEngine(board, state, mrx_strat, det_strats,
                             on_move=_log_move)
         viz = GameVisualizer(
@@ -380,10 +404,16 @@ def main() -> None:
                 print("No forced escape policy found; using random Mr. X strategy.")
                 mrx_strat = RandomStrategy(seed=args.seed)
 
-        det_strats = [
-            RandomStrategy(seed=(args.seed or 0) + i + 1)
-            for i in range(state.num_detectives)
-        ]
+        if loaded_det_policy:
+            det_strats = [
+                SerializedPolicyStrategy(loaded_det_policy, strict=False)
+                for _ in range(state.num_detectives)
+            ]
+        else:
+            det_strats = [
+                RandomStrategy(seed=(args.seed or 0) + i + 1)
+                for i in range(state.num_detectives)
+            ]
         engine = GameEngine(board, state, mrx_strat, det_strats,
                             on_move=_log_move)
         viz = GameVisualizer(
