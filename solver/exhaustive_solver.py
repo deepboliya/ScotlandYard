@@ -154,139 +154,79 @@ def solve_mrx_forced_escape(
     board: Board,
     initial_state: GameState,
 ) -> ExhaustiveResult:
-    """Compute a full-state Mr. X policy against all detective strategies.
+    """Compute full-state policies for both Mr. X and detectives.
 
-    Returns whether Mr. X has a forced escape and a policy mapping each
-    reachable Mr. X turn state to a chosen move.
+    Uses a single minimax pass over the game tree to compute the
+    **guaranteed survival depth** (worst-case rounds Mr. X survives
+    against optimal detectives).  A survival depth equal to
+    ``max_rounds`` means Mr. X has a forced escape.
 
-    When no forced escape exists, Mr. X's policy maximises the guaranteed
-    survival depth (minimax over rounds survived), so he still plays
-    optimally even when eventual capture is unavoidable.
+    Both ``policy`` (Mr. X) and ``detective_policy`` are populated
+    during this traversal — no redundant tree walks.
     """
     start = SolverState.from_game_state(initial_state)
     max_rounds = initial_state.max_rounds
 
-    memo: Dict[SolverState, bool] = {}
-    # depth_memo stores the guaranteed survival depth (worst-case rounds
-    # Mr. X survives against optimal detectives) for each state.
-    depth_memo: Dict[SolverState, int] = {}
+    memo: Dict[SolverState, int] = {}
     policy: Dict[SolverState, int] = {}
     detective_policy: Dict[SolverState, int] = {}
 
-    def can_mrx_force_win(state: SolverState) -> bool:
+    def get_survival_depth(state: SolverState) -> int:
+        """Return the guaranteed number of rounds Mr. X survives.
+
+        Minimax: Mr. X maximises, detectives minimise.
+        Also records the optimal move for each side in *policy* /
+        *detective_policy*.
+        """
         if state in memo:
             return memo[state]
 
-        terminal, mrx_wins = _is_terminal(board, state, max_rounds)
-        if terminal:
-            memo[state] = mrx_wins
-            return mrx_wins
+        # ── terminal checks ─────────────────────────────────────────
+        if state.mrx_position in state.detective_positions:
+            memo[state] = state.round_number
+            return state.round_number
+
+        if state.round_number >= max_rounds and state.current_player == "mrx":
+            memo[state] = max_rounds
+            return max_rounds
 
         children = _next_states(board, state)
 
+        # ── Mr. X turn (maximise) ──────────────────────────────────
         if state.current_player == "mrx":
-            child_results: List[Tuple[int, bool]] = [
-                (move, can_mrx_force_win(nxt))
-                for move, nxt in children
-            ]
+            if not children:
+                memo[state] = state.round_number
+                return state.round_number
 
-            winning_moves = [move for move, wins in child_results if wins]
-            if winning_moves:
-                chosen = min(winning_moves)
-                policy[state] = chosen
-                memo[state] = True
-                return True
+            best_depth = -1
+            best_move = children[0][0]
+            for move, nxt in children:
+                d = get_survival_depth(nxt)
+                if d > best_depth:
+                    best_depth = d
+                    best_move = move
 
-            # No forced win — pick the move that maximises guaranteed
-            # survival depth so Mr. X still plays as long as possible.
-            best_move = max(
-                children,
-                key=lambda pair: _survival_depth(board, pair[1], max_rounds, depth_memo),
-            )[0]
             policy[state] = best_move
-            memo[state] = False
-            return False
+            memo[state] = best_depth
+            return best_depth
 
-        # Detectives are adversarial: all detective moves must still be winning
-        all_children_good = True
-        blocking_moves: List[int] = []
+        # ── Detective turn (minimise) ──────────────────────────────
+        worst_depth = max_rounds + 1
+        worst_move = children[0][0]
         for move, nxt in children:
-            if not can_mrx_force_win(nxt):
-                all_children_good = False
-                blocking_moves.append(move)
+            d = get_survival_depth(nxt)
+            if d < worst_depth:
+                worst_depth = d
+                worst_move = move
 
-        if not all_children_good and blocking_moves:
-            # Detective can prevent Mr. X's escape — pick the move that
-            # minimises Mr. X's guaranteed survival depth.
-            best_det_move = min(
-                ((m, nxt) for m, nxt in children if m in blocking_moves),
-                key=lambda pair: _survival_depth(board, pair[1], max_rounds, depth_memo),
-            )[0]
-            detective_policy[state] = best_det_move
-        else:
-            # Mr. X wins regardless — detective still picks the move
-            # that minimises Mr. X's survival depth.
-            best_det_move = min(
-                children,
-                key=lambda pair: _survival_depth(board, pair[1], max_rounds, depth_memo),
-            )[0]
-            detective_policy[state] = best_det_move
+        detective_policy[state] = worst_move
+        memo[state] = worst_depth
+        return worst_depth
 
-        memo[state] = all_children_good
-        return all_children_good
-
-    forced_escape = can_mrx_force_win(start)
+    depth = get_survival_depth(start)
     return ExhaustiveResult(
-        forced_escape=forced_escape,
+        forced_escape=(depth >= max_rounds),
         policy=policy,
         detective_policy=detective_policy,
         states_evaluated=len(memo),
     )
-
-
-def _survival_depth(
-    board: Board,
-    state: SolverState,
-    max_rounds: int,
-    memo: Dict[SolverState, int],
-) -> int:
-    """Return the guaranteed number of rounds Mr. X survives from *state*.
-
-    Uses minimax: Mr. X maximises, detectives minimise.
-    A return value of ``max_rounds`` means Mr. X survives the whole game.
-    """
-    if state in memo:
-        return memo[state]
-
-    # Caught — survival = current round (didn't make it further)
-    if state.mrx_position in state.detective_positions:
-        memo[state] = state.round_number
-        return state.round_number
-
-    # Survived all rounds
-    if state.round_number >= max_rounds and state.current_player == "mrx":
-        memo[state] = max_rounds
-        return max_rounds
-
-    children = _next_states(board, state)
-
-    if state.current_player == "mrx":
-        if not children:
-            # Mr. X is trapped
-            memo[state] = state.round_number
-            return state.round_number
-        # Mr. X picks the move that maximises guaranteed survival
-        best = max(
-            _survival_depth(board, nxt, max_rounds, memo)
-            for _, nxt in children
-        )
-        memo[state] = best
-        return best
-    else:
-        # Detectives pick the move that minimises Mr. X's survival
-        worst = min(
-            _survival_depth(board, nxt, max_rounds, memo)
-            for _, nxt in children
-        )
-        memo[state] = worst
-        return worst
