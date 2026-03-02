@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from time import perf_counter
 from typing import Any
 
 from game.board import create_top_right_board
@@ -248,8 +249,11 @@ def main() -> None:
     )
 
     if args.mode == "solve":
+        t0 = perf_counter()
         result = solve_mrx_forced_escape(board, state)
+        solve_time_s = perf_counter() - t0
         print("\n=== Exhaustive Adversarial Solve ===")
+        print(f"Solve time: {solve_time_s:.6f} s")
         print(f"States evaluated: {result.states_evaluated}")
         print(f"Mr. X policy size: {len(result.policy)}")
         print(
@@ -283,6 +287,7 @@ def main() -> None:
                 },
                 "solver": {
                     "forced_escape": result.forced_escape,
+                    "solve_time_seconds": solve_time_s,
                     "states_evaluated": result.states_evaluated,
                     "policy_size": len(result.policy),
                     "detective_policy_size": len(result.detective_policy),
@@ -363,7 +368,10 @@ def main() -> None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             print("Using stored Mr. X policy from file.")
         else:
+            t0 = perf_counter()
             solve = solve_mrx_forced_escape(board, state)
+            solve_time_s = perf_counter() - t0
+            print(f"Solver time: {solve_time_s:.6f} s")
             if solve.forced_escape:
                 print("Using solved policy strategy for Mr. X (forced escape exists).")
                 mrx_strat = PolicyStrategy(solve.policy, strict=True)
@@ -396,7 +404,10 @@ def main() -> None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             print("Using stored Mr. X policy from file.")
         else:
+            t0 = perf_counter()
             solve = solve_mrx_forced_escape(board, state)
+            solve_time_s = perf_counter() - t0
+            print(f"Solver time: {solve_time_s:.6f} s")
             if solve.forced_escape:
                 print("Using solved policy strategy for Mr. X (forced escape exists).")
                 mrx_strat = PolicyStrategy(solve.policy, strict=True)
