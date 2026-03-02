@@ -174,10 +174,19 @@ def main() -> None:
             "(overrides --mrx/--detectives/--max-rounds)"
         ),
     )
+    parser.add_argument(
+        "--help-human",
+        action="store_true",
+        help="Highlight the optimal move from --policy-file in light yellow",
+    )
     args = parser.parse_args()
 
     if args.policy_file and args.mode == "solve":
         print("Error: --policy-file cannot be used with --mode solve.")
+        sys.exit(1)
+
+    if args.help_human and not args.policy_file:
+        print("Error: --help-human requires --policy-file.")
         sys.exit(1)
 
     loaded_policy: dict[str, int] | None = None
@@ -331,6 +340,13 @@ def main() -> None:
     # ── graphical modes ─────────────────────────────────────────────────
     from visualization.visualizer import GameVisualizer
 
+    # Build serialized hint policy from loaded file when --help-human
+    hint_policy: dict[str, int] | None = None
+    if args.help_human and loaded_policy is not None:
+        hint_policy = dict(loaded_policy)
+        if loaded_det_policy:
+            hint_policy.update(loaded_det_policy)
+
     if args.mode == "play-mrx":
         # HumanStrategy for Mr. X — move_selector wired up below
         mrx_strat = HumanStrategy()
@@ -351,6 +367,7 @@ def main() -> None:
             mode_label="Play as Mr. X",
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strats),
+            hint_policy=hint_policy,
         )
 
         # connect click-to-move
@@ -389,6 +406,7 @@ def main() -> None:
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strats),
             survival_depths=survival_depths,
+            hint_policy=hint_policy,
         )
 
         for strat in det_strats:
@@ -436,6 +454,7 @@ def main() -> None:
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strats),
             survival_depths=survival_depths,
+            hint_policy=hint_policy,
         )
 
         print("╔══════════════════════════════════════════╗")
