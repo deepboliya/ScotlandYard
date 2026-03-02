@@ -364,20 +364,21 @@ def main() -> None:
         viz.run_interactive()
 
     elif args.mode == "play-detective":
+        t0 = perf_counter()
+        solve = solve_mrx_forced_escape(board, state)
+        solve_time_s = perf_counter() - t0
+        print(f"Solver time: {solve_time_s:.6f} s")
+        survival_depths = solve.survival_depths
+
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             print("Using stored Mr. X policy from file.")
+        elif solve.forced_escape:
+            print("Using solved policy strategy for Mr. X (forced escape exists).")
+            mrx_strat = PolicyStrategy(solve.policy, strict=True)
         else:
-            t0 = perf_counter()
-            solve = solve_mrx_forced_escape(board, state)
-            solve_time_s = perf_counter() - t0
-            print(f"Solver time: {solve_time_s:.6f} s")
-            if solve.forced_escape:
-                print("Using solved policy strategy for Mr. X (forced escape exists).")
-                mrx_strat = PolicyStrategy(solve.policy, strict=True)
-            else:
-                print("No forced escape policy found; using random Mr. X strategy.")
-                mrx_strat = RandomStrategy(seed=args.seed)
+            print("No forced escape policy found; using random Mr. X strategy.")
+            mrx_strat = RandomStrategy(seed=args.seed)
 
         det_strats = [HumanStrategy() for _ in range(state.num_detectives)]
         engine = GameEngine(board, state, mrx_strat, det_strats,
@@ -387,6 +388,7 @@ def main() -> None:
             mode_label="Play as Detectives",
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strats),
+            survival_depths=survival_depths,
         )
 
         for strat in det_strats:
@@ -400,20 +402,21 @@ def main() -> None:
         viz.run_interactive()
 
     else:
+        t0 = perf_counter()
+        solve = solve_mrx_forced_escape(board, state)
+        solve_time_s = perf_counter() - t0
+        print(f"Solver time: {solve_time_s:.6f} s")
+        survival_depths = solve.survival_depths
+
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             print("Using stored Mr. X policy from file.")
+        elif solve.forced_escape:
+            print("Using solved policy strategy for Mr. X (forced escape exists).")
+            mrx_strat = PolicyStrategy(solve.policy, strict=True)
         else:
-            t0 = perf_counter()
-            solve = solve_mrx_forced_escape(board, state)
-            solve_time_s = perf_counter() - t0
-            print(f"Solver time: {solve_time_s:.6f} s")
-            if solve.forced_escape:
-                print("Using solved policy strategy for Mr. X (forced escape exists).")
-                mrx_strat = PolicyStrategy(solve.policy, strict=True)
-            else:
-                print("No forced escape policy found; using random Mr. X strategy.")
-                mrx_strat = RandomStrategy(seed=args.seed)
+            print("No forced escape policy found; using random Mr. X strategy.")
+            mrx_strat = RandomStrategy(seed=args.seed)
 
         if loaded_det_policy:
             det_strats = [
@@ -432,6 +435,7 @@ def main() -> None:
             mode_label="Observer",
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strats),
+            survival_depths=survival_depths,
         )
 
         print("╔══════════════════════════════════════════╗")

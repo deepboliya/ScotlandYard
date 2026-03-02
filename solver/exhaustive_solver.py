@@ -46,6 +46,7 @@ class ExhaustiveResult:
     forced_escape: bool
     policy: Dict[SolverState, int]
     detective_policy: Dict[SolverState, int]
+    survival_depths: Dict[SolverState, int]
     states_evaluated: int
 
 
@@ -228,5 +229,6 @@ def solve_mrx_forced_escape(
         forced_escape=(depth >= max_rounds),
         policy=policy,
         detective_policy=detective_policy,
+        survival_depths=memo,
         states_evaluated=len(memo),
     )

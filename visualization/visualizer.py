@@ -17,6 +17,7 @@ import networkx as nx
 from typing import List, Optional
 
 from game.engine import GameEngine
+from solver.exhaustive_solver import SolverState
 
 
 class GameVisualizer:
@@ -49,11 +50,13 @@ class GameVisualizer:
         mode_label: str = "Unknown",
         mrx_policy_label: str = "Unknown",
         detective_policy_label: str = "Unknown",
+        survival_depths: dict | None = None,
     ):
         self.engine = engine
         self.mode_label = mode_label
         self.mrx_policy_label = mrx_policy_label
         self.detective_policy_label = detective_policy_label
+        self.survival_depths = survival_depths
 
         # networkx graph (purely for drawing)
         self.G = nx.Graph()
@@ -206,10 +209,16 @@ class GameVisualizer:
         )
 
         # info bar
+        depth_str = ""
+        if self.survival_depths is not None:
+            depth = self._lookup_survival_depth(s)
+            if depth is not None:
+                depth_str = f"  │  Survival depth: {depth}"
         info = (
             f"Mr. X: node {s.mrx_position}  │  "
             f"Detectives: {s.detective_positions}  │  "
             f"Round {s.round_number}/{s.max_rounds}"
+            f"{depth_str}"
         )
         self.ax.text(
             0.02, -0.02, info,
@@ -268,6 +277,30 @@ class GameVisualizer:
         self.ax.axis("off")
         self.fig.tight_layout()
         self.fig.canvas.draw_idle()
+
+    # ── survival depth lookup ────────────────────────────────────────────
+
+    def _lookup_survival_depth(self, s) -> int | None:
+        """Look up the Mr. X survival depth for the current game state."""
+        if self.survival_depths is None:
+            return None
+        # The engine bumps round_number at the start of _step_mrx
+        # (before Mr. X chooses), but the solver records Mr. X states
+        # at the pre-increment round.  We try with the offset first,
+        # then without, to handle both the initial draw (round=0,
+        # no bump yet) and mid-game draws (round already bumped).
+        rn = s.round_number
+        for adj in ([rn - 1, rn] if s.current_player == "mrx" else [rn]):
+            key = SolverState(
+                round_number=adj,
+                current_player=s.current_player,
+                mrx_position=s.mrx_position,
+                detective_positions=tuple(s.detective_positions),
+            )
+            depth = self.survival_depths.get(key)
+            if depth is not None:
+                return depth
+        return None
 
     # ── node picking ────────────────────────────────────────────────────
 
