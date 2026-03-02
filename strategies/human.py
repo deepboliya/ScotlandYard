@@ -55,3 +55,16 @@ class HumanStrategy(Strategy):
         valid_moves: List[int],
     ) -> int:
         return self.move_selector(player_id, valid_moves)
+
+    def choose_detective_moves(
+        self,
+        board: Board,
+        state: GameState,
+        valid_moves_per_detective: List[List[int]],
+    ) -> List[int]:
+        """Ask the human to pick a move for each detective in sequence."""
+        moves: List[int] = []
+        for i, valid in enumerate(valid_moves_per_detective):
+            move = self.move_selector(f"detective_{i}", valid)
+            moves.append(move)
+        return moves

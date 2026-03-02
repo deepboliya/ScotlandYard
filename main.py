@@ -49,7 +49,7 @@ def _state_to_key(state: SolverState) -> str:
     )
 
 
-def _load_policy_bundle(path: str) -> tuple[dict[str, int], dict[str, int], int, list[int], int]:
+def _load_policy_bundle(path: str) -> tuple[dict[str, int], dict[str, list], int, list[int], int]:
     """Load policy + board configuration from JSON.
 
     Returns ``(mrx_policy, detective_policy, mrx_start, detective_starts, max_rounds)``.
@@ -102,10 +102,10 @@ def _load_policy_bundle(path: str) -> tuple[dict[str, int], dict[str, int], int,
     if not mrx_out:
         raise ValueError("Policy JSON has no valid Mr. X policy entries.")
 
-    det_out: dict[str, int] = {}
+    det_out: dict[str, list] = {}
     if isinstance(det_policy_obj, dict):
         for k, v in det_policy_obj.items():
-            if isinstance(k, str) and isinstance(v, int):
+            if isinstance(k, str) and isinstance(v, list):
                 det_out[k] = v
 
     return mrx_out, det_out, mrx_start, detective_starts, max_rounds
@@ -127,13 +127,10 @@ def _describe_strategy(strategy) -> str:
     return strategy.__class__.__name__
 
 
-def _describe_detective_strategies(det_strats: list) -> str:
-    if not det_strats:
+def _describe_detective_strategies(det_strat) -> str:
+    if det_strat is None:
         return "None"
-    labels = [_describe_strategy(s) for s in det_strats]
-    if all(lbl == labels[0] for lbl in labels):
-        return f"{labels[0]} ×{len(labels)}"
-    return "; ".join(f"D{i}: {lbl}" for i, lbl in enumerate(labels))
+    return _describe_strategy(det_strat)
 
 
 def main() -> None:
@@ -190,7 +187,7 @@ def main() -> None:
         sys.exit(1)
 
     loaded_policy: dict[str, int] | None = None
-    loaded_det_policy: dict[str, int] | None = None
+    loaded_det_policy: dict[str, list] | None = None
     mrx_start = args.mrx
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
@@ -283,7 +280,7 @@ def main() -> None:
                 for k, v in result.policy.items()
             }
             serialised_det_policy = {
-                _state_to_key(k): v
+                _state_to_key(k): list(v)
                 for k, v in result.detective_policy.items()
             }
             serialised = {
@@ -317,16 +314,14 @@ def main() -> None:
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
         if loaded_det_policy:
-            det_strats = [
-                SerializedPolicyStrategy(loaded_det_policy, strict=False)
-                for _ in range(state.num_detectives)
-            ]
+            det_strat = SerializedPolicyStrategy(
+                {},  # Mr. X policy not used here
+                serialized_det_policy=loaded_det_policy,
+                strict=False,
+            )
         else:
-            det_strats = [
-                RandomStrategy(seed=(args.seed or 0) + i + 1)
-                for i in range(state.num_detectives)
-            ]
-        engine = GameEngine(board, state, mrx_strat, det_strats,
+            det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
+        engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=_log_move)
 
         print(f"Board: {board}")
@@ -341,7 +336,7 @@ def main() -> None:
     from visualization.visualizer import GameVisualizer
 
     # Build serialized hint policy from loaded file when --help-human
-    hint_policy: dict[str, int] | None = None
+    hint_policy: dict | None = None
     if args.help_human and loaded_policy is not None:
         hint_policy = dict(loaded_policy)
         if loaded_det_policy:
@@ -351,22 +346,20 @@ def main() -> None:
         # HumanStrategy for Mr. X — move_selector wired up below
         mrx_strat = HumanStrategy()
         if loaded_det_policy:
-            det_strats = [
-                SerializedPolicyStrategy(loaded_det_policy, strict=False)
-                for _ in range(state.num_detectives)
-            ]
+            det_strat = SerializedPolicyStrategy(
+                {},
+                serialized_det_policy=loaded_det_policy,
+                strict=False,
+            )
         else:
-            det_strats = [
-                RandomStrategy(seed=(args.seed or 0) + i + 1)
-                for i in range(state.num_detectives)
-            ]
-        engine = GameEngine(board, state, mrx_strat, det_strats,
+            det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
+        engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=_log_move)
         viz = GameVisualizer(
             engine,
             mode_label="Play as Mr. X",
             mrx_policy_label=_describe_strategy(mrx_strat),
-            detective_policy_label=_describe_detective_strategies(det_strats),
+            detective_policy_label=_describe_detective_strategies(det_strat),
             hint_policy=hint_policy,
         )
 
@@ -397,20 +390,19 @@ def main() -> None:
             print("No forced escape policy found; using random Mr. X strategy.")
             mrx_strat = RandomStrategy(seed=args.seed)
 
-        det_strats = [HumanStrategy() for _ in range(state.num_detectives)]
-        engine = GameEngine(board, state, mrx_strat, det_strats,
+        det_strat = HumanStrategy()
+        engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=_log_move)
         viz = GameVisualizer(
             engine,
             mode_label="Play as Detectives",
             mrx_policy_label=_describe_strategy(mrx_strat),
-            detective_policy_label=_describe_detective_strategies(det_strats),
+            detective_policy_label=_describe_detective_strategies(det_strat),
             survival_depths=survival_depths,
             hint_policy=hint_policy,
         )
 
-        for strat in det_strats:
-            strat.move_selector = viz.wait_for_click
+        det_strat.move_selector = viz.wait_for_click
 
         print("╔══════════════════════════════════════════╗")
         print("║ Scotland Yard — Play as Detectives       ║")
@@ -437,22 +429,20 @@ def main() -> None:
             mrx_strat = RandomStrategy(seed=args.seed)
 
         if loaded_det_policy:
-            det_strats = [
-                SerializedPolicyStrategy(loaded_det_policy, strict=False)
-                for _ in range(state.num_detectives)
-            ]
+            det_strat = SerializedPolicyStrategy(
+                {},
+                serialized_det_policy=loaded_det_policy,
+                strict=False,
+            )
         else:
-            det_strats = [
-                RandomStrategy(seed=(args.seed or 0) + i + 1)
-                for i in range(state.num_detectives)
-            ]
-        engine = GameEngine(board, state, mrx_strat, det_strats,
+            det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
+        engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=_log_move)
         viz = GameVisualizer(
             engine,
             mode_label="Observer",
             mrx_policy_label=_describe_strategy(mrx_strat),
-            detective_policy_label=_describe_detective_strategies(det_strats),
+            detective_policy_label=_describe_detective_strategies(det_strat),
             survival_depths=survival_depths,
             hint_policy=hint_policy,
         )

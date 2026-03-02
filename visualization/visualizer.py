@@ -215,7 +215,7 @@ class GameVisualizer:
             title = f"GAME OVER — {s.result_str}"
             title_clr = self.CLR_MRX if not s.mrx_caught else self.CLR_DET
         else:
-            player = s.current_player.replace("_", " ").title()
+            player = "Mr. X" if s.current_player == "mrx" else "Detectives"
             title = f"Round {s.round_number} │ {player}'s Turn"
             title_clr = "black"
 

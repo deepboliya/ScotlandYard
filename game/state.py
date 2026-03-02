@@ -15,7 +15,7 @@ class GameState:
         mrx_position:       Current node of Mr. X.
         detective_positions: Current nodes of each detective.
         round_number:       Current round (0 = game hasn't started).
-        current_player:     ``"mrx"`` or ``"detective_<i>"``.
+        current_player:     ``"mrx"`` or ``"detectives"``.
         mrx_history:        Mr. X's position after each round.
         reveal_rounds:      Rounds on which Mr. X must reveal his position.
         game_over:          Whether the game has ended.
@@ -27,6 +27,11 @@ class GameState:
     detective_positions: List[int]
     round_number: int = 0
     current_player: str = "mrx"
+
+    def __post_init__(self):
+        # Detectives are interchangeable — always keep positions sorted
+        # so that permutations of the same set are identical states.
+        self.detective_positions.sort()
     mrx_history: List[int] = field(default_factory=list)
     reveal_rounds: Tuple[int, ...] = (3, 8, 13)
     game_over: bool = False
@@ -42,6 +47,10 @@ class GameState:
     @property
     def is_mrx_turn(self) -> bool:
         return self.current_player == "mrx"
+
+    @property
+    def is_detective_turn(self) -> bool:
+        return self.current_player == "detectives"
 
     @property
     def is_mrx_revealed(self) -> bool:

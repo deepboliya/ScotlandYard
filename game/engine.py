@@ -2,6 +2,9 @@
 
 The engine is the central coordinator.  It does **not** contain any
 strategy logic; strategies are injected as constructor dependencies.
+
+Detectives move as a group: after Mr. X moves, all detectives choose
+their destinations simultaneously in a single step.
 """
 
 from __future__ import annotations
@@ -24,8 +27,8 @@ class GameEngine:
         Initial (mutable) game state.
     mrx_strategy : Strategy
         Strategy that drives Mr. X's decisions.
-    detective_strategies : list[Strategy]
-        One strategy per detective (same order as ``state.detective_positions``).
+    detective_strategy : Strategy
+        A single strategy that controls **all** detectives jointly.
     on_move : callable, optional
         ``on_move(player_id, from_node, to_node)`` called after every move.
     """
@@ -35,13 +38,13 @@ class GameEngine:
         board: Board,
         state: GameState,
         mrx_strategy: Strategy,
-        detective_strategies: List[Strategy],
+        detective_strategy: Strategy,
         on_move: Optional[Callable] = None,
     ):
         self.board = board
         self.state = state
         self.mrx_strategy = mrx_strategy
-        self.detective_strategies = detective_strategies
+        self.detective_strategy = detective_strategy
         self.on_move = on_move
 
     # ---- move helpers ---------------------------------------------------
@@ -56,18 +59,46 @@ class GameEngine:
             return sorted(n for n in neighbors if n not in excluded)
         return sorted(neighbors)
 
+    def get_mrx_valid_moves(self) -> List[int]:
+        """Valid moves for Mr. X (cannot move onto a detective's node)."""
+        s = self.state
+        return self.get_valid_moves(s.mrx_position, s.detective_positions)
+
+    def get_detective_valid_moves(self) -> List[List[int]]:
+        """Valid moves for each detective.
+
+        Each detective can move to any neighbour not occupied by another
+        detective (Mr. X's node *is* a valid destination — that's a
+        capture).
+        """
+        s = self.state
+        result: List[List[int]] = []
+        for idx in range(s.num_detectives):
+            occupied = [
+                s.detective_positions[i]
+                for i in range(s.num_detectives)
+                if i != idx
+            ]
+            moves = self.get_valid_moves(s.detective_positions[idx], occupied)
+            if not moves:
+                moves = [s.detective_positions[idx]]  # stuck — stay put
+            result.append(moves)
+        return result
+
     def get_current_valid_moves(self) -> List[int]:
-        """Valid moves for whoever's turn it currently is."""
+        """Valid moves for whoever's turn it currently is.
+
+        For Mr. X returns a flat list.  For detectives this returns
+        the valid moves for detective_0 only (used by some UI code
+        that needs a single list — prefer ``get_detective_valid_moves``
+        for full info).
+        """
         s = self.state
         if s.is_mrx_turn:
-            return self.get_valid_moves(s.mrx_position, s.detective_positions)
-        idx = int(s.current_player.split("_")[1])
-        occupied = [
-            s.detective_positions[i]
-            for i in range(s.num_detectives)
-            if i != idx
-        ]
-        return self.get_valid_moves(s.detective_positions[idx], occupied)
+            return self.get_mrx_valid_moves()
+        # Legacy: return first detective's valid moves
+        per_det = self.get_detective_valid_moves()
+        return per_det[0] if per_det else []
 
     # ---- win / loss -----------------------------------------------------
 
@@ -98,10 +129,12 @@ class GameEngine:
 
     # ---- stepping -------------------------------------------------------
 
-    def step(self) -> Optional[int]:
-        """Execute **one player's** move and advance to the next player.
+    def step(self) -> Optional[int | List[int]]:
+        """Execute **one side's** move and advance to the next side.
 
-        Returns the destination node, or ``None`` if the game is already over.
+        For Mr. X returns the destination node.
+        For detectives returns a list of destination nodes.
+        Returns ``None`` if the game is already over.
         """
         s = self.state
         if s.game_over or self._check_game_over():
@@ -110,7 +143,7 @@ class GameEngine:
         if s.is_mrx_turn:
             move = self._step_mrx()
         else:
-            move = self._step_detective()
+            move = self._step_detectives()
 
         self._check_game_over()
         return move
@@ -132,58 +165,55 @@ class GameEngine:
         s.mrx_position = move
         s.mrx_history.append(move)
 
-        # Advance turn to first detective (or back to mrx if none).
-        s.current_player = "detective_0" if s.num_detectives else "mrx"
+        # Advance turn to detectives (or back to mrx if none).
+        s.current_player = "detectives" if s.num_detectives else "mrx"
 
         if self.on_move:
             self.on_move("mrx", from_node, move)
         return move
 
-    def _step_detective(self) -> int:
+    def _step_detectives(self) -> List[int]:
+        """Move all detectives at once."""
         s = self.state
-        idx = int(s.current_player.split("_")[1])
 
-        occupied = [
-            s.detective_positions[i]
-            for i in range(s.num_detectives)
-            if i != idx
-        ]
-        valid = self.get_valid_moves(s.detective_positions[idx], occupied)
+        valid_per_det = self.get_detective_valid_moves()
+        from_nodes = list(s.detective_positions)
 
-        from_node = s.detective_positions[idx]
-        if valid:
-            strategy = self.detective_strategies[idx]
-            move = strategy.choose_move(
-                self.board, s, f"detective_{idx}", valid
-            )
+        moves = self.detective_strategy.choose_detective_moves(
+            self.board, s, valid_per_det
+        )
+
+        assert len(moves) == s.num_detectives, (
+            f"Expected {s.num_detectives} moves, got {len(moves)}"
+        )
+        for i, (move, valid) in enumerate(zip(moves, valid_per_det)):
             assert move in valid, (
-                f"Invalid detective_{idx} move {move}; valid = {valid}"
+                f"Invalid detective_{i} move {move}; valid = {valid}"
             )
-            s.detective_positions[idx] = move
-        else:
-            move = from_node  # stuck — stay put
 
-        # Advance to next detective or back to Mr. X.
-        if idx + 1 < s.num_detectives:
-            s.current_player = f"detective_{idx + 1}"
-        else:
-            s.current_player = "mrx"
+        for i, move in enumerate(moves):
+            s.detective_positions[i] = move
+
+        # Keep positions sorted (detectives are interchangeable).
+        s.detective_positions.sort()
+
+        # Advance to Mr. X's turn.
+        s.current_player = "mrx"
 
         if self.on_move:
-            self.on_move(f"detective_{idx}", from_node, move)
-        return move
+            for i, (frm, to) in enumerate(zip(from_nodes, moves)):
+                self.on_move(f"detective_{i}", frm, to)
+        return moves
 
     # ---- convenience ----------------------------------------------------
 
     def play_round(self) -> None:
-        """Play one complete round (Mr. X + every detective)."""
+        """Play one complete round (Mr. X + all detectives)."""
         if self.state.game_over:
             return
         self.step()  # Mr. X
-        for _ in range(self.state.num_detectives):
-            if self.state.game_over:
-                return
-            self.step()
+        if not self.state.game_over:
+            self.step()  # all detectives at once
 
     def play_game(self) -> GameState:
         """Play until the game is over and return the final state."""
