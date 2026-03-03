@@ -23,16 +23,13 @@ import sys
 from time import perf_counter
 from typing import Any
 
-from game.board import create_top_right_board
+from game.board import create_board_from_map
 from game.state import GameState
 from game.engine import GameEngine
 from strategies.random_strategy import RandomStrategy
 from strategies.human import HumanStrategy
 from strategies.policy_strategy import PolicyStrategy, SerializedPolicyStrategy
 from solver.exhaustive_solver import SolverState, solve_mrx_forced_escape
-
-
-BOARD_ID = "top-right-extended-v2"
 
 
 def _lookup_survival_depth(state: GameState, survival_depths: dict | None) -> int | None:
@@ -76,7 +73,7 @@ def _state_to_key(state: SolverState) -> str:
     )
 
 
-def _load_policy_bundle(path: str) -> tuple[dict[str, int], dict[str, list], int, list[int], int]:
+def _load_policy_bundle(path: str, board_id: str) -> tuple[dict[str, int], dict[str, list], int, list[int], int]:
     """Load policy + board configuration from JSON.
 
     Returns ``(mrx_policy, detective_policy, mrx_start, detective_starts, max_rounds)``.
@@ -94,10 +91,10 @@ def _load_policy_bundle(path: str) -> tuple[dict[str, int], dict[str, list], int
             "--mode solve --dump-policy <file>."
         )
 
-    board_id = data.get("board")
-    if board_id is not None and board_id != BOARD_ID:
+    policy_board_id = data.get("board")
+    if policy_board_id is not None and policy_board_id != board_id:
         raise ValueError(
-            f"Policy board '{board_id}' is incompatible with current board '{BOARD_ID}'."
+            f"Policy board '{policy_board_id}' is incompatible with current board '{board_id}'."
         )
 
     config: Any = data["config"]
@@ -162,7 +159,7 @@ def _describe_detective_strategies(det_strat) -> str:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Scotland Yard — top-right board (nodes 1-20)"
+        description="Scotland Yard"
     )
     parser.add_argument(
         "--mode",
@@ -174,6 +171,8 @@ def main() -> None:
             "solve: exhaustive adversarial solve"
         ),
     )
+    parser.add_argument("--map", type=str, default="first50",
+                        help="Map name in maps/ directory, without .txt (default: first50)")
     parser.add_argument("--mrx", type=int, default=1,
                         help="Starting node for Mr. X (default: 1)")
     parser.add_argument("--detectives", type=int, nargs="+", default=[5, 10],
@@ -213,6 +212,9 @@ def main() -> None:
         print("Error: --help-human requires --policy-file.")
         sys.exit(1)
 
+    map_path = f"maps/{args.map}.txt"
+    board_id = map_path
+
     loaded_policy: dict[str, int] | None = None
     loaded_det_policy: dict[str, list] | None = None
     mrx_start = args.mrx
@@ -231,7 +233,7 @@ def main() -> None:
                 mrx_start,
                 detective_starts,
                 max_rounds,
-            ) = _load_policy_bundle(args.policy_file)
+            ) = _load_policy_bundle(args.policy_file, board_id)
 
             mismatches: list[str] = []
             if _cli_flag_present("--mrx") and cli_mrx != mrx_start:
@@ -263,7 +265,7 @@ def main() -> None:
             sys.exit(1)
 
     # ── board & validation ──────────────────────────────────────────────
-    board = create_top_right_board()
+    board = create_board_from_map(map_path)
 
     all_pos = [mrx_start] + detective_starts
     for p in all_pos:
@@ -285,16 +287,25 @@ def main() -> None:
         t0 = perf_counter()
         result = solve_mrx_forced_escape(board, state)
         solve_time_s = perf_counter() - t0
+        start_key = SolverState.from_game_state(state)
+        guaranteed_survival_depth = result.survival_depths.get(
+            start_key, state.round_number,
+        )
+
         print("\n=== Exhaustive Adversarial Solve ===")
         print(f"Solve time: {solve_time_s:.6f} s")
         print(f"States evaluated: {result.states_evaluated}")
         print(f"Mr. X policy size: {len(result.policy)}")
+        print(f"Guaranteed survival depth: {guaranteed_survival_depth}")
+        print(
+            f"Guaranteed survival rounds from start: "
+            f"{guaranteed_survival_depth - state.round_number}"
+        )
         print(
             "Forced escape:",
             "YES" if result.forced_escape else "NO",
         )
 
-        start_key = SolverState.from_game_state(state)
         first_move = result.policy.get(start_key)
         if first_move is not None:
             print(f"Recommended first move for Mr. X: {first_move}")
@@ -312,7 +323,7 @@ def main() -> None:
             }
             serialised = {
                 "format": "scotlandyard-policy-v2",
-                "board": BOARD_ID,
+                "board": board_id,
                 "config": {
                     "mrx_start": state.mrx_position,
                     "detective_starts": state.detective_positions,
@@ -320,6 +331,10 @@ def main() -> None:
                 },
                 "solver": {
                     "forced_escape": result.forced_escape,
+                    "guaranteed_survival_depth": guaranteed_survival_depth,
+                    "guaranteed_survival_rounds": (
+                        guaranteed_survival_depth - state.round_number
+                    ),
                     "solve_time_seconds": solve_time_s,
                     "states_evaluated": result.states_evaluated,
                     "policy_size": len(result.policy),

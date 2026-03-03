@@ -89,17 +89,14 @@ class GameVisualizer:
     # ── drawing ─────────────────────────────────────────────────────────
 
     def _build_draw_positions(self):
-        """Create readable positions; untangle larger graphs automatically."""
+        """Use board positions when every node has one, else spring layout."""
         board_pos = self.engine.board.positions
-        has_all_positions = all(n in board_pos for n in self.engine.board.nodes)
-        n_nodes = len(self.engine.board.nodes)
-
-        # Keep handcrafted placement for smaller boards.
-        if has_all_positions and n_nodes <= 20:
+        if board_pos and all(n in board_pos for n in self.engine.board.nodes):
             return board_pos
 
-        # Larger boards: spring layout generally reduces overlap/crossings.
-        init = board_pos if has_all_positions else None
+        # Fallback: spring layout
+        n_nodes = len(self.engine.board.nodes)
+        init = board_pos if board_pos else None
         k = 1.2 / max(1.0, math.sqrt(n_nodes))
         return nx.spring_layout(
             self.G,
@@ -129,11 +126,17 @@ class GameVisualizer:
 
         nearest_distances.sort()
         median = nearest_distances[len(nearest_distances) // 2]
-        return max(0.08, min(0.65, median * 0.45))
+        return median * 0.45
 
     def draw(self) -> None:
         """Render the current game state onto the axes."""
         self.ax.clear()
+
+        # Remove any previous figure-level texts (info bar, mode panel, help)
+        for txt in getattr(self, '_fig_texts', []):
+            txt.remove()
+        self._fig_texts = []
+
         s = self.engine.state
         pos = self._draw_pos
 
@@ -141,7 +144,6 @@ class GameVisualizer:
         nx.draw_networkx_edges(
             self.G, pos, ax=self.ax,
             edge_color=self.CLR_EDGE, width=1.8, alpha=0.55,
-            connectionstyle="arc3,rad=0.06",
         )
 
         # optimal-move hint (background ring)
@@ -236,11 +238,11 @@ class GameVisualizer:
             f"Round {s.round_number}/{s.max_rounds}"
             f"{depth_str}"
         )
-        self.ax.text(
-            0.02, -0.02, info,
-            transform=self.ax.transAxes, ha="left",
+        self._fig_texts.append(self.fig.text(
+            0.5, 0.01, info,
+            ha="center", va="bottom",
             fontsize=9, color="gray",
-        )
+        ))
 
         # hint-miss warning
         if self._hint_missing:
@@ -253,34 +255,33 @@ class GameVisualizer:
                 zorder=10,
             )
 
-        # policy/mode panel
+        # policy/mode panel (top-right, outside the graph area)
         policy_text = (
             f"Mode: {self.mode_label}\n"
             f"Mr. X policy: {self.mrx_policy_label}\n"
             f"Detective policy: {self.detective_policy_label}"
         )
-        self.ax.text(
-            0.02,
-            0.98,
+        self._fig_texts.append(self.fig.text(
+            0.99,
+            0.99,
             policy_text,
-            transform=self.ax.transAxes,
-            ha="left",
+            ha="right",
             va="top",
-            fontsize=9,
+            fontsize=8,
             color="#2c3e50",
             bbox={"boxstyle": "round,pad=0.35", "facecolor": "white", "alpha": 0.88, "edgecolor": "#d0d7de"},
-        )
+        ))
 
         # help bar
         if self._valid_moves:
             help_txt = "Click a green node to move  │  [Q] Quit"
         else:
             help_txt = "[N] Step  [R] Round  [A] Auto  [Q] Quit"
-        self.ax.text(
-            0.98, -0.02, help_txt,
-            transform=self.ax.transAxes, ha="right",
+        self._fig_texts.append(self.fig.text(
+            0.99, 0.01, help_txt,
+            ha="right", va="bottom",
             fontsize=9, color="gray",
-        )
+        ))
 
         # legend
         legend = [
@@ -362,8 +363,14 @@ class GameVisualizer:
 
         Returns the target node, ``_HINT_MISSING`` if the policy is
         active but the state is absent, or ``None`` if hints are off.
+        Only returns a hint for Mr. X turns (int values); detective
+        entries (list values) are skipped.
         """
         if self.hint_policy is None:
+            return None
+
+        # Hints only apply on Mr. X's turn
+        if s.current_player != "mrx":
             return None
 
         rn = s.round_number
@@ -372,14 +379,14 @@ class GameVisualizer:
         # Try exact match first
         key = f"r={rn}|p={s.current_player}|x={s.mrx_position}|d={det_str}"
         move = self.hint_policy.get(key)
-        if move is not None:
+        if isinstance(move, int):
             return move
 
         # Fallback for interactive Mr. X input phase
         if s.current_player == "mrx" and rn > 0:
             key_adj = f"r={rn - 1}|p=mrx|x={s.mrx_position}|d={det_str}"
             move = self.hint_policy.get(key_adj)
-            if move is not None:
+            if isinstance(move, int):
                 return move
 
         return self._HINT_MISSING
