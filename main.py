@@ -401,18 +401,10 @@ def main() -> None:
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             survival_depths = loaded_survival_depths
-            print("Using stored Mr. X policy from file (skipping solver).")
+            print("Using stored Mr. X policy from file.")
         else:
-            t0 = perf_counter()
-            solve = solve_mrx_forced_escape(board, state)
-            solve_time_s = perf_counter() - t0
-            print(f"Solver time: {solve_time_s:.6f} s")
-            survival_depths = solve.survival_depths
-
-            if solve.forced_escape:
-                mrx_strat = PolicyStrategy(solve.policy, strict=True)
-            else:
-                mrx_strat = RandomStrategy(seed=args.seed)
+            mrx_strat = RandomStrategy(seed=args.seed)
+            print("No policy file; Mr. X plays randomly.")
 
         if loaded_det_policy:
             det_strat = SerializedPolicyStrategy(
@@ -482,20 +474,10 @@ def main() -> None:
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             survival_depths = loaded_survival_depths
-            print("Using stored Mr. X policy from file (skipping solver).")
+            print("Using stored Mr. X policy from file.")
         else:
-            t0 = perf_counter()
-            solve = solve_mrx_forced_escape(board, state)
-            solve_time_s = perf_counter() - t0
-            print(f"Solver time: {solve_time_s:.6f} s")
-            survival_depths = solve.survival_depths
-
-            if solve.forced_escape:
-                print("Using solved policy strategy for Mr. X (forced escape exists).")
-                mrx_strat = PolicyStrategy(solve.policy, strict=True)
-            else:
-                print("No forced escape policy found; using random Mr. X strategy.")
-                mrx_strat = RandomStrategy(seed=args.seed)
+            mrx_strat = RandomStrategy(seed=args.seed)
+            print("No policy file; Mr. X plays randomly.")
 
         det_strat = HumanStrategy()
         log = _make_move_logger(state, survival_depths)
@@ -514,7 +496,7 @@ def main() -> None:
 
         print("╔══════════════════════════════════════════╗")
         print("║ Scotland Yard — Play as Detectives       ║")
-        print("║ Mr. X uses solved policy when available. ║")
+        print("║ Mr. X uses policy file when available.   ║")
         print("║ Click green nodes for each detective.    ║")
         print("╚══════════════════════════════════════════╝\n")
         viz.run_interactive()
@@ -525,20 +507,10 @@ def main() -> None:
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
             survival_depths = loaded_survival_depths
-            print("Using stored Mr. X policy from file (skipping solver).")
+            print("Using stored Mr. X policy from file.")
         else:
-            t0 = perf_counter()
-            solve = solve_mrx_forced_escape(board, state)
-            solve_time_s = perf_counter() - t0
-            print(f"Solver time: {solve_time_s:.6f} s")
-            survival_depths = solve.survival_depths
-
-            if solve.forced_escape:
-                print("Using solved policy strategy for Mr. X (forced escape exists).")
-                mrx_strat = PolicyStrategy(solve.policy, strict=True)
-            else:
-                print("No forced escape policy found; using random Mr. X strategy.")
-                mrx_strat = RandomStrategy(seed=args.seed)
+            mrx_strat = RandomStrategy(seed=args.seed)
+            print("No policy file; Mr. X plays randomly.")
 
         if loaded_det_policy:
             det_strat = SerializedPolicyStrategy(

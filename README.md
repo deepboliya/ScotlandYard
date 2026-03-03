@@ -69,10 +69,10 @@ Click green-highlighted nodes to move. Detectives move automatically.
 ### Play as Detectives
 
 ```bash
-# Against a stored Mr. X policy (instant start, no solver wait)
+# Against a stored Mr. X policy
 python main.py --mode play-detective --policy-file x13_d7_43_r24_cpp.json
 
-# Without policy file (runs solver first, then plays)
+# Without policy file (Mr. X plays randomly)
 python main.py --mode play-detective --mrx 1 --detectives 5 10
 ```
 
