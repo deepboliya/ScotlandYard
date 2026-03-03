@@ -157,6 +157,39 @@ def _describe_detective_strategies(det_strat) -> str:
     return _describe_strategy(det_strat)
 
 
+def _write_compact_json(f, obj: dict) -> None:
+    """Write JSON matching the C++ solver format.
+
+    Top-level and small nested objects use ``indent=2``.
+    Large dicts (policy, detective_policy) put one entry per line
+    with arrays kept on a single line (no per-element newlines).
+    """
+    f.write("{\n")
+    top_keys = sorted(obj.keys())
+    for ti, tk in enumerate(top_keys):
+        tv = obj[tk]
+        comma = ",\n" if ti < len(top_keys) - 1 else "\n"
+        if isinstance(tv, dict) and len(tv) > 20:
+            # Large dict — one entry per line, inline arrays
+            f.write(f"  {json.dumps(tk)}: {{\n")
+            items = sorted(tv.items())
+            for ii, (ik, iv) in enumerate(items):
+                ic = ",\n" if ii < len(items) - 1 else "\n"
+                f.write(f"    {json.dumps(ik)}: {json.dumps(iv, separators=(', ', ': '))}{ic}")
+            f.write(f"  }}{comma}")
+        elif isinstance(tv, dict):
+            # Small dict — indent=2 style, inline values
+            f.write(f"  {json.dumps(tk)}: {{\n")
+            items = sorted(tv.items())
+            for ii, (ik, iv) in enumerate(items):
+                ic = ",\n" if ii < len(items) - 1 else "\n"
+                f.write(f"    {json.dumps(ik)}: {json.dumps(iv, separators=(', ', ': '))}{ic}")
+            f.write(f"  }}{comma}")
+        else:
+            f.write(f"  {json.dumps(tk)}: {json.dumps(tv, separators=(', ', ': '))}{comma}")
+    f.write("}\n")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scotland Yard"
@@ -344,7 +377,7 @@ def main() -> None:
                 "detective_policy": serialised_det_policy,
             }
             with open(dump_path, "w", encoding="utf-8") as f:
-                json.dump(serialised, f, indent=2, sort_keys=True)
+                _write_compact_json(f, serialised)
             print(f"Policy written to: {dump_path}")
 
         return
