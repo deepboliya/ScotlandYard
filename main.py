@@ -21,7 +21,6 @@ import argparse
 import json
 import sys
 from time import perf_counter
-from typing import Any
 
 from game.board import create_board_from_map
 from game.state import GameState
@@ -36,13 +35,23 @@ def _lookup_survival_depth(state: GameState, survival_depths: dict | None) -> in
     """Look up survival depth exactly matching the given game state."""
     if survival_depths is None:
         return None
-    key = SolverState(
+    key_obj = SolverState(
         round_number=state.round_number,
         current_player=state.current_player,
         mrx_position=state.mrx_position,
         detective_positions=tuple(sorted(state.detective_positions)),
     )
-    return survival_depths.get(key)
+
+    # In-memory solver uses SolverState keys; loaded JSON uses string keys.
+    depth = survival_depths.get(key_obj)
+    if depth is not None:
+        return depth
+
+    depth = survival_depths.get(_state_to_key(key_obj))
+    if depth is not None:
+        return depth
+
+    return None
 
 
 def _make_move_logger(state: GameState, survival_depths: dict | None = None):
@@ -73,16 +82,21 @@ def _state_to_key(state: SolverState) -> str:
     )
 
 
-def _load_policy_bundle(path: str, board_id: str) -> tuple[dict[str, int], dict[str, list], int, list[int], int]:
+def _load_policy_bundle(path: str, board_id: str) -> tuple[
+    dict[str, int],
+    dict[str, list],
+    dict[str, int],
+    int,
+    list[int],
+    int,
+]:
     """Load policy + board configuration from JSON.
 
-    Returns ``(mrx_policy, detective_policy, mrx_start, detective_starts, max_rounds)``.
+    Returns ``(mrx_policy, detective_policy, survival_depths,
+    mrx_start, detective_starts, max_rounds)``.
     """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
-
-    if not isinstance(data, dict):
-        raise ValueError("Policy JSON must be a JSON object.")
 
     # New structured format (required)
     if "config" not in data or "policy" not in data:
@@ -97,42 +111,26 @@ def _load_policy_bundle(path: str, board_id: str) -> tuple[dict[str, int], dict[
             f"Policy board '{policy_board_id}' is incompatible with current board '{board_id}'."
         )
 
-    config: Any = data["config"]
-    policy_obj: Any = data["policy"]
-    det_policy_obj: Any = data.get("detective_policy", {})
+    config = data["config"]
+    mrx_start = config["mrx_start"]
+    detective_starts = config["detective_starts"]
+    max_rounds = config["max_rounds"]
 
-    if not isinstance(config, dict):
-        raise ValueError("Policy JSON field 'config' must be an object.")
-    if not isinstance(policy_obj, dict):
-        raise ValueError("Policy JSON field 'policy' must be an object.")
-
-    mrx_start = config.get("mrx_start")
-    detective_starts = config.get("detective_starts")
-    max_rounds = config.get("max_rounds")
-
-    if not isinstance(mrx_start, int):
-        raise ValueError("config.mrx_start must be an integer.")
-    if not isinstance(detective_starts, list) or not all(
-        isinstance(x, int) for x in detective_starts
-    ):
-        raise ValueError("config.detective_starts must be a list of integers.")
-    if not isinstance(max_rounds, int):
-        raise ValueError("config.max_rounds must be an integer.")
-
-    mrx_out: dict[str, int] = {}
-    for k, v in policy_obj.items():
-        if isinstance(k, str) and isinstance(v, int):
-            mrx_out[k] = v
+    mrx_out = data["policy"]
     if not mrx_out:
         raise ValueError("Policy JSON has no valid Mr. X policy entries.")
 
-    det_out: dict[str, list] = {}
-    if isinstance(det_policy_obj, dict):
-        for k, v in det_policy_obj.items():
-            if isinstance(k, str) and isinstance(v, list):
-                det_out[k] = v
+    det_out = data.get("detective_policy", {})
+    survival_depths_out = data.get("survival_depths", {})
 
-    return mrx_out, det_out, mrx_start, detective_starts, max_rounds
+    return (
+        mrx_out,
+        det_out,
+        survival_depths_out,
+        mrx_start,
+        detective_starts,
+        max_rounds,
+    )
 
 
 def _cli_flag_present(flag: str) -> bool:
@@ -140,13 +138,14 @@ def _cli_flag_present(flag: str) -> bool:
 
 
 def _describe_strategy(strategy) -> str:
-    if isinstance(strategy, HumanStrategy):
+    cls = strategy.__class__
+    if cls is HumanStrategy:
         return "Human (click)"
-    if isinstance(strategy, SerializedPolicyStrategy):
+    if cls is SerializedPolicyStrategy:
         return "Stored policy (JSON)"
-    if isinstance(strategy, PolicyStrategy):
+    if cls is PolicyStrategy:
         return "Solved policy"
-    if isinstance(strategy, RandomStrategy):
+    if cls is RandomStrategy:
         return "Random"
     return strategy.__class__.__name__
 
@@ -169,7 +168,7 @@ def _write_compact_json(f, obj: dict) -> None:
     for ti, tk in enumerate(top_keys):
         tv = obj[tk]
         comma = ",\n" if ti < len(top_keys) - 1 else "\n"
-        if isinstance(tv, dict) and len(tv) > 20:
+        if type(tv) is dict and len(tv) > 20:
             # Large dict — one entry per line, inline arrays
             f.write(f"  {json.dumps(tk)}: {{\n")
             items = sorted(tv.items())
@@ -177,7 +176,7 @@ def _write_compact_json(f, obj: dict) -> None:
                 ic = ",\n" if ii < len(items) - 1 else "\n"
                 f.write(f"    {json.dumps(ik)}: {json.dumps(iv, separators=(', ', ': '))}{ic}")
             f.write(f"  }}{comma}")
-        elif isinstance(tv, dict):
+        elif type(tv) is dict:
             # Small dict — indent=2 style, inline values
             f.write(f"  {json.dumps(tk)}: {{\n")
             items = sorted(tv.items())
@@ -250,6 +249,7 @@ def main() -> None:
 
     loaded_policy: dict[str, int] | None = None
     loaded_det_policy: dict[str, list] | None = None
+    loaded_survival_depths: dict[str, int] | None = None
     mrx_start = args.mrx
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
@@ -263,6 +263,7 @@ def main() -> None:
             (
                 loaded_policy,
                 loaded_det_policy,
+                loaded_survival_depths,
                 mrx_start,
                 detective_starts,
                 max_rounds,
@@ -293,6 +294,11 @@ def main() -> None:
                 f"mrx={mrx_start}, detectives={detective_starts}, "
                 f"max_rounds={max_rounds}"
             )
+            if loaded_survival_depths:
+                print(
+                    "Loaded per-state survival depths from policy file: "
+                    f"{len(loaded_survival_depths)} states"
+                )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"Error loading --policy-file: {exc}")
             sys.exit(1)
@@ -354,6 +360,10 @@ def main() -> None:
                 _state_to_key(k): list(v)
                 for k, v in result.detective_policy.items()
             }
+            serialised_survival_depths = {
+                _state_to_key(k): v
+                for k, v in result.survival_depths.items()
+            }
             serialised = {
                 "format": "scotlandyard-policy-v2",
                 "board": board_id,
@@ -372,9 +382,11 @@ def main() -> None:
                     "states_evaluated": result.states_evaluated,
                     "policy_size": len(result.policy),
                     "detective_policy_size": len(result.detective_policy),
+                    "survival_depths_size": len(result.survival_depths),
                 },
                 "policy": serialised_policy,
                 "detective_policy": serialised_det_policy,
+                "survival_depths": serialised_survival_depths,
             }
             with open(dump_path, "w", encoding="utf-8") as f:
                 _write_compact_json(f, serialised)
@@ -384,19 +396,24 @@ def main() -> None:
 
     # ── text-only mode ──────────────────────────────────────────────────
     if args.no_viz:
-        # Run solver to get survival depths for the move log
-        t0 = perf_counter()
-        solve = solve_mrx_forced_escape(board, state)
-        solve_time_s = perf_counter() - t0
-        print(f"Solver time: {solve_time_s:.6f} s")
-        survival_depths = solve.survival_depths
+        survival_depths = None
 
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-        elif solve.forced_escape:
-            mrx_strat = PolicyStrategy(solve.policy, strict=True)
+            survival_depths = loaded_survival_depths
+            print("Using stored Mr. X policy from file (skipping solver).")
         else:
-            mrx_strat = RandomStrategy(seed=args.seed)
+            t0 = perf_counter()
+            solve = solve_mrx_forced_escape(board, state)
+            solve_time_s = perf_counter() - t0
+            print(f"Solver time: {solve_time_s:.6f} s")
+            survival_depths = solve.survival_depths
+
+            if solve.forced_escape:
+                mrx_strat = PolicyStrategy(solve.policy, strict=True)
+            else:
+                mrx_strat = RandomStrategy(seed=args.seed)
+
         if loaded_det_policy:
             det_strat = SerializedPolicyStrategy(
                 {},  # Mr. X policy not used here
@@ -460,21 +477,25 @@ def main() -> None:
         viz.run_interactive()
 
     elif args.mode == "play-detective":
-        t0 = perf_counter()
-        solve = solve_mrx_forced_escape(board, state)
-        solve_time_s = perf_counter() - t0
-        print(f"Solver time: {solve_time_s:.6f} s")
-        survival_depths = solve.survival_depths
+        survival_depths = None
 
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            print("Using stored Mr. X policy from file.")
-        elif solve.forced_escape:
-            print("Using solved policy strategy for Mr. X (forced escape exists).")
-            mrx_strat = PolicyStrategy(solve.policy, strict=True)
+            survival_depths = loaded_survival_depths
+            print("Using stored Mr. X policy from file (skipping solver).")
         else:
-            print("No forced escape policy found; using random Mr. X strategy.")
-            mrx_strat = RandomStrategy(seed=args.seed)
+            t0 = perf_counter()
+            solve = solve_mrx_forced_escape(board, state)
+            solve_time_s = perf_counter() - t0
+            print(f"Solver time: {solve_time_s:.6f} s")
+            survival_depths = solve.survival_depths
+
+            if solve.forced_escape:
+                print("Using solved policy strategy for Mr. X (forced escape exists).")
+                mrx_strat = PolicyStrategy(solve.policy, strict=True)
+            else:
+                print("No forced escape policy found; using random Mr. X strategy.")
+                mrx_strat = RandomStrategy(seed=args.seed)
 
         det_strat = HumanStrategy()
         log = _make_move_logger(state, survival_depths)
@@ -499,21 +520,25 @@ def main() -> None:
         viz.run_interactive()
 
     else:
-        t0 = perf_counter()
-        solve = solve_mrx_forced_escape(board, state)
-        solve_time_s = perf_counter() - t0
-        print(f"Solver time: {solve_time_s:.6f} s")
-        survival_depths = solve.survival_depths
+        survival_depths = None
 
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            print("Using stored Mr. X policy from file.")
-        elif solve.forced_escape:
-            print("Using solved policy strategy for Mr. X (forced escape exists).")
-            mrx_strat = PolicyStrategy(solve.policy, strict=True)
+            survival_depths = loaded_survival_depths
+            print("Using stored Mr. X policy from file (skipping solver).")
         else:
-            print("No forced escape policy found; using random Mr. X strategy.")
-            mrx_strat = RandomStrategy(seed=args.seed)
+            t0 = perf_counter()
+            solve = solve_mrx_forced_escape(board, state)
+            solve_time_s = perf_counter() - t0
+            print(f"Solver time: {solve_time_s:.6f} s")
+            survival_depths = solve.survival_depths
+
+            if solve.forced_escape:
+                print("Using solved policy strategy for Mr. X (forced escape exists).")
+                mrx_strat = PolicyStrategy(solve.policy, strict=True)
+            else:
+                print("No forced escape policy found; using random Mr. X strategy.")
+                mrx_strat = RandomStrategy(seed=args.seed)
 
         if loaded_det_policy:
             det_strat = SerializedPolicyStrategy(

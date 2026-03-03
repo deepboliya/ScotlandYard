@@ -340,6 +340,15 @@ class GameVisualizer:
         if depth is not None:
             return depth
 
+        # Loaded JSON policy stores string keys.
+        key_str = (
+            f"r={rn}|p={s.current_player}|x={s.mrx_position}|"
+            f"d={','.join(map(str, det_pos))}"
+        )
+        depth = self.survival_depths.get(key_str)
+        if depth is not None:
+            return depth
+
         # Fallback: during interactive Mr. X input, engine round is +1
         # but position is still old. Try rn-1.
         if s.current_player == "mrx" and rn > 0:
@@ -350,6 +359,14 @@ class GameVisualizer:
                 detective_positions=det_pos,
             )
             depth = self.survival_depths.get(key_adj)
+            if depth is not None:
+                return depth
+
+            key_adj_str = (
+                f"r={rn - 1}|p=mrx|x={s.mrx_position}|"
+                f"d={','.join(map(str, det_pos))}"
+            )
+            depth = self.survival_depths.get(key_adj_str)
             if depth is not None:
                 return depth
 
@@ -379,14 +396,14 @@ class GameVisualizer:
         # Try exact match first
         key = f"r={rn}|p={s.current_player}|x={s.mrx_position}|d={det_str}"
         move = self.hint_policy.get(key)
-        if isinstance(move, int):
+        if move is not None:
             return move
 
         # Fallback for interactive Mr. X input phase
         if s.current_player == "mrx" and rn > 0:
             key_adj = f"r={rn - 1}|p=mrx|x={s.mrx_position}|d={det_str}"
             move = self.hint_policy.get(key_adj)
-            if isinstance(move, int):
+            if move is not None:
                 return move
 
         return self._HINT_MISSING

@@ -16,7 +16,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from itertools import product
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, List, Tuple
 
 from game.board import Board
 from game.state import GameState
@@ -67,17 +67,15 @@ class ExhaustiveResult:
 def _valid_moves(
     board: Board,
     node: int,
-    excluded_nodes: Iterable[int],
 ) -> List[int]:
-    excluded = set(excluded_nodes)
-    return sorted(n for n in board.neighbors(node) if n not in excluded)
+    return sorted(board.neighbors(node))
 
 
 def _mrx_next_states(
     board: Board, state: SolverState
 ) -> List[Tuple[int, SolverState]]:
     """Enumerate Mr. X's legal moves as ``(move, next_state)``."""
-    legal = _valid_moves(board, state.mrx_position, state.detective_positions)
+    legal = _valid_moves(board, state.mrx_position)
     if not legal:
         return []
 
@@ -112,20 +110,16 @@ def _detective_next_states(
     # (excluding other detectives' *current* positions).
     per_det_moves: List[List[int]] = []
     for idx in range(num_dets):
-        others = det_positions[:idx] + det_positions[idx + 1:]
-        moves = _valid_moves(board, det_positions[idx], others)
+        moves = _valid_moves(board, det_positions[idx])
         if not moves:
             moves = [det_positions[idx]]  # stuck — stay put
         per_det_moves.append(moves)
 
-    # Enumerate all joint placements, filtering out collisions
-    # and deduplicating permutations (detectives are interchangeable).
+    # Enumerate all joint placements, deduplicating permutations
+    # (detectives are interchangeable, may share nodes).
     seen: set[Tuple[int, ...]] = set()
     results: List[Tuple[Tuple[int, ...], SolverState]] = []
     for combo in product(*per_det_moves):
-        # No two detectives may occupy the same node.
-        if len(set(combo)) != num_dets:
-            continue
         sorted_pos = tuple(sorted(combo))
         if sorted_pos in seen:
             continue
