@@ -1,226 +1,210 @@
-# Scotland Yard — Game Environment
+# Scotland Yard
 
-A simplified Scotland Yard game environment for developing and testing
-**escape strategies for Mr. X**.
+A Scotland Yard game environment with an **exhaustive minimax solver**
+for computing optimal strategies for both Mr. X and detectives.
 
-## Board
-
-This project uses an **extended top-right board** with both short-range
-links and a few long-range connections to mimic Underground jumps.
-
-- Nodes: **1–35**
-- Mix of local and long-range edges
-- Single edge type for now (no taxi/bus/underground ticket types yet)
+## Project Structure
 
 ```
-        1
-       / \
-      8   9──20──2
-     / \ / \     |
-   18  19   20  10─11
-    |           |    \
-    6─7─17     3──12
-              |
-              4
-              |
-             13─14─15─16
-                    |
-                    5
+main.py              CLI entry point (all game modes)
+game/
+  board.py           Graph representation (adjacency, positions)
+  state.py           Game state (positions, rounds, turn tracking)
+  engine.py          Turn engine (step / round / full game)
+strategies/
+  base.py            Abstract Strategy interface
+  random_strategy.py Random move selection
+  human.py           Click-to-move via visualiser callback
+  policy_strategy.py Plays from a precomputed policy (in-memory or JSON)
+solver/
+  exhaustive_solver.py  Python minimax solver with memoisation
+  solve.cpp             C++ minimax solver (same algorithm, ~7x faster)
+visualization/
+  visualizer.py      Interactive matplotlib + networkx GUI
+maps/
+  first50.txt        50 nodes, 81 edges
+  first100.txt       99 nodes, 198 edges
+  full_map.txt       199 nodes, 436 edges
+  node_locations.csv Node coordinates for visualisation layout
 ```
-
-## Architecture
-
-```
-game/            Core game logic (board graph, state, engine)
-strategies/      Pluggable player strategies (abstract base + impls)
-visualization/   Interactive matplotlib visualiser
-main.py          CLI entry point
-```
-
-Game logic and strategies are **fully decoupled** — swap in your own
-strategy by implementing `strategies.base.Strategy`.
 
 ## Requirements
 
 - Python 3.10+
-- `matplotlib`
-- `networkx`
-
-Install dependencies:
+- `matplotlib`, `networkx`
+- C++17 compiler (for the C++ solver, optional)
 
 ```bash
 pip install -r requirements.txt
 ```
 
+## Game Rules
+
+- Mr. X moves first each round, then all detectives move simultaneously.
+- A detective landing on Mr. X's node captures him (detectives win).
+- Mr. X can move to any adjacent node, including detective-occupied nodes
+  (capture is checked after the move).
+- Detectives can share nodes with each other.
+- If Mr. X survives `max_rounds` rounds, he wins.
+
 ## Usage
 
-### 1) Visual game modes
+### Observer Mode (watch AI play)
 
 ```bash
-# Watch random AIs play (press N/R/A/Q)
 python main.py
+python main.py --map first100 --mrx 13 --detectives 7 43 --max-rounds 24
+```
 
-# Play as Mr. X (click green nodes to move)
+Controls: **N** step | **R** round | **A** auto-play | **Q** quit.
+
+### Play as Mr. X
+
+```bash
 python main.py --mode play-mrx
-
-# Play as detectives against Mr. X policy
-python main.py --mode play-detective
-
-# Play as detectives against a stored policy file
-python main.py --mode play-detective --policy-file policy_v3.json
 ```
 
-### 2) Text-only mode
+Click green-highlighted nodes to move. Detectives move automatically.
+
+### Play as Detectives
 
 ```bash
-# Same rules, no GUI
-python main.py --no-viz
+# Against a stored Mr. X policy (instant start, no solver wait)
+python main.py --mode play-detective --policy-file x13_d7_43_r24_cpp.json
+
+# Without policy file (runs solver first, then plays)
+python main.py --mode play-detective --mrx 1 --detectives 5 10
 ```
 
-### 3) Solver mode (exhaustive)
+Click green nodes for each detective in turn.
+
+### Text-Only Mode
 
 ```bash
-# Exhaustive adversarial solve from a starting config
-python main.py --mode solve --mrx 1 --detectives 5 10 --max-rounds 4
-
-# Save solved policy as JSON
-python main.py --mode solve --mrx 1 --detectives 5 10 --max-rounds 4 --dump-policy policy_v2.json
+python main.py --no-viz --policy-file x13_d7_43_r24_cpp.json
 ```
 
-### 4) Custom starts
+### Solver Mode (exhaustive minimax)
 
 ```bash
-# Two detectives
-python main.py --mrx 1 --detectives 5 10 --max-rounds 15
+# Python solver
+python main.py --mode solve --mrx 13 --detectives 7 43 --max-rounds 24 --dump-policy
 
-# More detectives
-python main.py --mrx 9 --detectives 3 6 14
+# C++ solver (faster)
+g++ -O2 -std=c++17 -o solve solver/solve.cpp
+./solve --map maps/first50.txt --mrx 13 --detectives 7 43 --max-rounds 24
 ```
 
-## Policy JSON Format (`scotlandyard-policy-v2`)
+Both produce a JSON policy file (e.g. `x13_d7_43_r24.json` or
+`x13_d7_43_r24_cpp.json`) that can be loaded with `--policy-file`.
 
-Dumped files include both solved policy and exact solve configuration:
+### Hint Overlay
+
+```bash
+python main.py --mode play-mrx --policy-file x13_d7_43_r24_cpp.json --help-human
+```
+
+Highlights the solver-optimal move in light yellow while you play.
+
+## CLI Reference
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--mode` | `auto` | `auto`, `play-mrx`, `play-detective`, `solve` |
+| `--map` | `first50` | Map name in `maps/` (without `.txt`) |
+| `--mrx` | `1` | Mr. X starting node |
+| `--detectives` | `5 10` | Detective starting nodes |
+| `--max-rounds` | `15` | Rounds before Mr. X wins |
+| `--seed` | — | Random seed for reproducibility |
+| `--no-viz` | — | Text-only mode (no GUI) |
+| `--dump-policy` | — | Write solver output to JSON |
+| `--policy-file` | — | Load policy + config from JSON |
+| `--help-human` | — | Highlight optimal moves (requires `--policy-file`) |
+
+## Policy JSON Format
+
+Policy files (`scotlandyard-policy-v2`) contain everything needed to
+replay or analyse a solved configuration:
 
 ```json
 {
   "format": "scotlandyard-policy-v2",
-  "board": "top-right-extended-v2",
+  "board": "maps/first50.txt",
   "config": {
-    "mrx_start": 1,
-    "detective_starts": [5, 10],
-    "max_rounds": 4
-  },
-  "solver": {
-    "forced_escape": true,
-    "states_evaluated": 630,
-    "policy_size": 113
+    "mrx_start": 13,
+    "detective_starts": [7, 43],
+    "max_rounds": 24
   },
   "policy": {
-    "r=0|p=mrx|x=1|d=5,10": 8
+    "r=0|p=mrx|x=13|d=7,43": 4
+  },
+  "detective_policy": {
+    "r=1|p=detectives|x=4|d=7,43": [6, 18]
+  },
+  "survival_depths": {
+    "r=0|p=mrx|x=13|d=7,43": 10
+  },
+  "solver": {
+    "forced_escape": false,
+    "guaranteed_survival_depth": 10,
+    "states_evaluated": 1873613,
+    "policy_size": 949405,
+    "detective_policy_size": 858086,
+    "survival_depths_size": 1873613,
+    "solve_time_seconds": 5.07
   }
 }
 ```
 
-When `--policy-file` is used, startup configuration is loaded from the
-JSON `config` block.
+- **`policy`**: maps each Mr. X state to the optimal next node.
+- **`detective_policy`**: maps each detective state to a list of target nodes.
+- **`survival_depths`**: maps every visited state to the guaranteed survival
+  depth (the round at which Mr. X is caught under optimal play, or
+  `max_rounds` if he escapes). Loaded by the visualiser and move logger
+  to display `SD=10(+9)` annotations without re-running the solver.
+- When `--policy-file` is used, `config` overrides `--mrx`/`--detectives`/`--max-rounds`.
 
-If you explicitly pass `--mrx`, `--detectives`, or `--max-rounds` together
-with `--policy-file`, they must exactly match the JSON config or the
-program exits with an error.
+## Solver Details
 
-`--policy-file` is not allowed with `--mode play-mrx` because in that mode
-you control Mr. X directly.
+### What is computed
 
-## Controls
+The solver determines whether Mr. X has a strategy that guarantees
+escape against all possible detective strategies. Formally, it checks:
 
-| Key | Action |
-|-----|--------|
-| **N** | Step — one player's move |
-| **R** | Round — Mr. X + all detectives |
-| **A** | Auto-play to completion |
-| **Q** | Quit |
+> Does there exist a Mr. X policy such that for every detective policy,
+> Mr. X survives all rounds?
 
-In **play-mrx** mode, click on green-highlighted nodes to move Mr. X.
+### Algorithm
+
+Minimax over the full game tree with memoisation:
+
+1. **Terminal checks**: detective on Mr. X → loss; survived `max_rounds` → win.
+2. **Mr. X turn** (maximise): pick the move with the highest survival depth.
+3. **Detective turn** (minimise): enumerate all joint detective placements
+   (Cartesian product, deduplicated by sorted positions), pick the one
+   that minimises Mr. X's survival depth.
+4. **Memoisation**: states are keyed by `(round, player, mrx_pos, det_positions)`.
+
+### Output
+
+- `Forced escape: YES` → policy guarantees Mr. X survives all rounds.
+- `Forced escape: NO` → detectives can always catch Mr. X; policy
+  maximises survival depth as a best-effort fallback.
 
 ## Adding a Custom Strategy
 
 ```python
 from strategies.base import Strategy
 
-class MyBrilliantStrategy(Strategy):
+class MyStrategy(Strategy):
     def choose_move(self, board, state, player_id, valid_moves):
-        # your logic here
         return best_node
 ```
 
-Then wire it into the engine:
+Wire it into the engine:
 
 ```python
 engine = GameEngine(board, state,
-                    mrx_strategy=MyBrilliantStrategy(),
-                    detective_strategies=[...])
+                    mrx_strategy=MyStrategy(),
+                    detective_strategy=MyStrategy())
 ```
-
-## Game Rules (simplified)
-
-* Mr. X moves first each round, then every detective moves in order.
-* Detectives **cannot** share a node with each other.
-* Detectives **can** land on Mr. X's node → Mr. X is caught.
-* Mr. X **cannot** move to a detective's node.
-* If Mr. X has no valid move he is caught.
-* If Mr. X survives `max_rounds` rounds (default 15) he wins.
-
-## Exhaustive Mr. X Strategy Search
-
-`--mode solve` computes whether Mr. X has a policy that guarantees
-escape against **every possible detective strategy** from the chosen
-initial state.
-
-### What is being solved
-
-The solver checks whether there exists a Mr. X policy $\pi_X$ such that
-for all detective policies $\pi_D$, Mr. X still escapes:
-
-$$
-\exists\,\pi_X\;\forall\,\pi_D:\;\text{Mr. X escapes}
-$$
-
-### How it works (high-level)
-
-The game is treated as a finite turn-based adversarial graph search.
-Each solver state contains:
-
-- `round_number`
-- `current_player`
-- `mrx_position`
-- `detective_positions`
-
-For each state:
-
-1. **Terminal checks**
-  - detective on Mr. X node ⇒ loss
-  - Mr. X trapped on his turn ⇒ loss
-  - survived through `max_rounds` ⇒ win
-
-2. **Expand legal moves**
-  - Mr. X cannot move onto detective nodes
-  - detectives cannot overlap each other
-
-3. **Minimax-style recursion with memoization**
-  - Mr. X turn = **OR node** (at least one winning child is enough)
-  - detective turn = **AND node** (all detective children must still win for Mr. X)
-  - memoization caches visited states to avoid recomputation
-
-4. **Policy extraction**
-  - at each Mr. X state, store a winning move if one exists,
-    otherwise store a deterministic fallback move.
-
-This is equivalent to rolling out all detective counter-strategies,
-but done efficiently by state recursion + caching instead of enumerating
-full detective policy tables explicitly.
-
-### Solver output interpretation
-
-- `Forced escape: YES` ⇒ stored Mr. X policy is guaranteed for that config.
-- `Forced escape: NO` ⇒ no guaranteed escape exists; policy is best-effort.
-- `states_evaluated` indicates explored state-space size.
