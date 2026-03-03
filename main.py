@@ -218,7 +218,7 @@ def main() -> None:
     parser.add_argument(
         "--dump-policy",
         action="store_true",
-        help="Write solved Mr. X policy to auto-named JSON file (xX_dX_X_rX.json)",
+        help="Write solved Mr. X policy to auto-named JSON file (<map>_xX_dX_X_rX.json)",
     )
     parser.add_argument(
         "--policy-file",
@@ -351,7 +351,8 @@ def main() -> None:
 
         if args.dump_policy:
             det_str = "_".join(map(str, state.detective_positions))
-            dump_path = f"x{state.mrx_position}_d{det_str}_r{state.max_rounds}.json"
+            map_name = args.map
+            dump_path = f"{map_name}_x{state.mrx_position}_d{det_str}_r{state.max_rounds}.json"
             serialised_policy = {
                 _state_to_key(k): v
                 for k, v in result.policy.items()
