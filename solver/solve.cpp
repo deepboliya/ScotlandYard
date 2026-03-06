@@ -6,13 +6,13 @@
  * a JSON policy file compatible with main.py --policy-file.
  *
  * Build:
- *     g++ -O2 -std=c++17 -o solve solver/solve.cpp
+ *     g++ -O3 -std=c++17 -o solve solver/solve.cpp
  *
  * Usage:
  *     ./solve --map maps/first50.txt --mrx 10 --detectives 20 30 --max-rounds 5
  *
  * Output:
- *     x10_d20_30_r5_cpp.json   (same format as Python --dump-policy)
+ *     first50_x10_d20_30_r5_cpp.json   (same format as Python --dump-policy)
  */
 
 #include <algorithm>
@@ -23,6 +23,7 @@
 #include <functional>
 #include <iostream>
 #include <map>
+#include <queue>
 #include <set>
 #include <sstream>
 #include <string>
@@ -62,6 +63,29 @@ static void read_map(const string &path) {
         adj[v].push_back(u);
     }
     for (auto &a : adj) sort(a.begin(), a.end());
+}
+
+// ── BFS distance matrix ────────────────────────────────────────────────
+
+static vector<vector<int>> dist_matrix;  // dist_matrix[u][v] = shortest path
+
+static void precompute_distances() {
+    dist_matrix.assign(max_node + 1, vector<int>(max_node + 1, 9999));
+    for (int i = 1; i <= max_node; ++i) {
+        if (adj[i].empty()) continue;
+        dist_matrix[i][i] = 0;
+        queue<int> q;
+        q.push(i);
+        while (!q.empty()) {
+            int cur = q.front(); q.pop();
+            for (int nb : adj[cur]) {
+                if (dist_matrix[i][nb] == 9999) {
+                    dist_matrix[i][nb] = dist_matrix[i][cur] + 1;
+                    q.push(nb);
+                }
+            }
+        }
+    }
 }
 
 // ── State ──────────────────────────────────────────────────────────────
@@ -121,49 +145,51 @@ static int MAX_ROUNDS;
 
 static int get_survival_depth(const SolverState &state);
 
-// Enumerate all valid joint detective placements.
-// Mirrors _detective_next_states() in Python exactly.
-struct DetChild { vector<int> combo; SolverState next; };
+// ── Recursive per-detective move enumeration with early cutoff ──────
+//
+// Instead of generating the full Cartesian product of detective moves
+// upfront, we recurse one detective at a time.  At each leaf (all
+// detectives placed) we call get_survival_depth and track the global
+// minimum.  We short-circuit as soon as worst_depth equals the current
+// round (detectives caught Mr. X — can't do better).
 
-static vector<DetChild> detective_next_states(const SolverState &state) {
-    const int nd = (int)state.det_positions.size();
+struct DetRecurseCtx {
+    int              round_number;
+    int              mrx_position;
+    int              nd;
+    vector<vector<int>> per_det;     // per_det[i] = ordered moves for det i
+    vector<int>      combo;          // current combo being built
+    int              worst_depth;    // best (minimum) depth found so far
+    vector<int>      worst_combo;    // combo that achieved worst_depth
+};
 
-    // Per-detective moves (no exclusions — detectives may share nodes).
-    vector<vector<int>> per_det(nd);
-    for (int i = 0; i < nd; ++i) {
-        per_det[i] = valid_moves(state.det_positions[i]);
-        if (per_det[i].empty())
-            per_det[i] = {state.det_positions[i]};  // stuck
+static void det_recurse(DetRecurseCtx &ctx, int det_idx) {
+    if (ctx.worst_depth == ctx.round_number) return;  // can't do better
+
+    if (det_idx == ctx.nd) {
+        // All detectives placed — build child state and evaluate.
+        vector<int> sorted_combo(ctx.combo);
+        sort(sorted_combo.begin(), sorted_combo.end());
+
+        SolverState nxt;
+        nxt.round_number  = ctx.round_number;
+        nxt.is_mrx_turn   = true;
+        nxt.mrx_position  = ctx.mrx_position;
+        nxt.det_positions = sorted_combo;
+
+        int d = get_survival_depth(nxt);
+        if (d < ctx.worst_depth) {
+            ctx.worst_depth = d;
+            ctx.worst_combo = ctx.combo;   // unsorted original
+        }
+        return;
     }
 
-    // Cartesian product with dedup filtering (detectives may share nodes).
-    set<vector<int>> seen;
-    vector<DetChild> results;
-    vector<int> combo(nd);
-
-    function<void(int)> enumerate = [&](int idx) {
-        if (idx == nd) {
-            {
-                vector<int> tmp(combo);
-                sort(tmp.begin(), tmp.end());
-                if (!seen.insert(tmp).second) return;  // dedup
-                // build child
-                SolverState nxt;
-                nxt.round_number  = state.round_number;
-                nxt.is_mrx_turn   = true;
-                nxt.mrx_position  = state.mrx_position;
-                nxt.det_positions = tmp;          // sorted
-                results.push_back({combo, nxt});
-            }
-            return;
-        }
-        for (int m : per_det[idx]) {
-            combo[idx] = m;
-            enumerate(idx + 1);
-        }
-    };
-    enumerate(0);
-    return results;
+    for (int m : ctx.per_det[det_idx]) {
+        ctx.combo[det_idx] = m;
+        det_recurse(ctx, det_idx + 1);
+        if (ctx.worst_depth == ctx.round_number) return;  // early exit
+    }
 }
 
 static int get_survival_depth(const SolverState &state) {
@@ -183,6 +209,19 @@ static int get_survival_depth(const SolverState &state) {
         return MAX_ROUNDS;
     }
 
+    // ── distance pruning: closest detective can't reach X in time ──
+    if (state.is_mrx_turn && !state.det_positions.empty()) {
+        int min_dist = 9999;
+        for (int d : state.det_positions)
+            min_dist = min(min_dist, dist_matrix[state.mrx_position][d]);
+        if (min_dist > MAX_ROUNDS - state.round_number) {
+            memo[state] = MAX_ROUNDS;
+            mrx_policy[state] = valid_moves(state.mrx_position).empty()
+                ? state.mrx_position : valid_moves(state.mrx_position)[0];
+            return MAX_ROUNDS;
+        }
+    }
+
     if (state.is_mrx_turn) {
         // Mr. X turn — maximise
         vector<int> moves = valid_moves(state.mrx_position);
@@ -190,6 +229,18 @@ static int get_survival_depth(const SolverState &state) {
         if (moves.empty()) {                       // trapped
             memo[state] = state.round_number;
             return state.round_number;
+        }
+
+        // Move ordering: prefer moves farthest from all detectives.
+        if (!state.det_positions.empty()) {
+            sort(moves.begin(), moves.end(), [&](int a, int b) {
+                int da = 9999, db = 9999;
+                for (int d : state.det_positions) {
+                    da = min(da, dist_matrix[a][d]);
+                    db = min(db, dist_matrix[b][d]);
+                }
+                return da > db;  // farther first
+            });
         }
 
         int best_depth = -1, best_move = moves[0];
@@ -212,25 +263,35 @@ static int get_survival_depth(const SolverState &state) {
         return best_depth;
 
     } else {
-        // Detective turn — minimise
-        auto children = detective_next_states(state);
+        // Detective turn — minimise (recursive per-detective enumeration)
+        const int nd = (int)state.det_positions.size();
+        const int xpos = state.mrx_position;
 
-        if (children.empty()) {
-            memo[state] = MAX_ROUNDS;
-            return MAX_ROUNDS;
+        DetRecurseCtx ctx;
+        ctx.round_number = state.round_number;
+        ctx.mrx_position = xpos;
+        ctx.nd           = nd;
+        ctx.combo.resize(nd);
+        ctx.worst_depth  = MAX_ROUNDS + 1;
+
+        // Per-detective moves, ordered by distance to Mr. X (closest first).
+        ctx.per_det.resize(nd);
+        for (int i = 0; i < nd; ++i) {
+            ctx.per_det[i] = valid_moves(state.det_positions[i]);
+            if (ctx.per_det[i].empty())
+                ctx.per_det[i] = {state.det_positions[i]};  // stuck
+            sort(ctx.per_det[i].begin(), ctx.per_det[i].end(),
+                 [&](int a, int b) {
+                     return dist_matrix[a][xpos] < dist_matrix[b][xpos];
+                 });
         }
 
-        int worst_depth = MAX_ROUNDS + 1;
-        vector<int> worst_combo = children[0].combo;
+        det_recurse(ctx, 0);
 
-        for (auto &[combo, nxt] : children) {
-            int d = get_survival_depth(nxt);
-            if (d < worst_depth) { worst_depth = d; worst_combo = combo; }
-            if (worst_depth == state.round_number) break;
-        }
-
-        det_policy[state] = worst_combo;
-        memo[state]       = worst_depth;
+        int worst_depth = (ctx.worst_depth > MAX_ROUNDS) ? MAX_ROUNDS : ctx.worst_depth;
+        if (!ctx.worst_combo.empty())
+            det_policy[state] = ctx.worst_combo;
+        memo[state] = worst_depth;
         return worst_depth;
     }
 }
@@ -248,13 +309,13 @@ static string json_escape(const string &s) {
 }
 
 static void write_json(const string &path,
-                       const string &map_path,
-                       int mrx_start,
-                       const vector<int> &det_starts,
-                       bool forced_escape,
-                       int guaranteed_depth,
-                       double solve_time_s,
-                       size_t states_evaluated)
+                        const string &map_path,
+                        int mrx_start,
+                        const vector<int> &det_starts,
+                        bool forced_escape,
+                        int guaranteed_depth,
+                        double solve_time_s,
+                        size_t states_evaluated)
 {
     // Sort policies by key for deterministic output (matches Python json sort_keys=True)
     map<string, int>         sorted_mrx;
@@ -371,6 +432,9 @@ int main(int argc, char *argv[]) {
 
     // ── read map ───────────────────────────────────────────────
     read_map(map_path);
+    cout << "Precomputing BFS distances..." << flush;
+    precompute_distances();
+    cout << " done." << endl;
 
     // ── validate positions ─────────────────────────────────────
     auto node_ok = [](int n) { return n >= 1 && n <= max_node && !adj[n].empty(); };
@@ -424,7 +488,15 @@ int main(int argc, char *argv[]) {
         if (i) det_str += '_';
         det_str += to_string(det_starts[i]);
     }
-    string out_path = "x" + to_string(mrx_start) + "_d" + det_str
+    // Extract map name (strip directory prefix and .txt suffix)
+    string map_name = map_path;
+    {
+        auto slash = map_name.rfind('/');
+        if (slash != string::npos) map_name = map_name.substr(slash + 1);
+        auto dot = map_name.rfind('.');
+        if (dot != string::npos) map_name = map_name.substr(0, dot);
+    }
+    string out_path = map_name + "_x" + to_string(mrx_start) + "_d" + det_str
                     + "_r" + to_string(MAX_ROUNDS) + "_cpp.json";
 
     write_json(out_path, map_path, mrx_start, det_starts,
