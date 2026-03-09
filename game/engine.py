@@ -74,12 +74,7 @@ class GameEngine:
         s = self.state
         result: List[List[int]] = []
         for idx in range(s.num_detectives):
-            occupied = [
-                s.detective_positions[i]
-                for i in range(s.num_detectives)
-                if i != idx
-            ]
-            moves = self.get_valid_moves(s.detective_positions[idx], occupied)
+            moves = self.get_valid_moves(s.detective_positions[idx])
             if not moves:
                 moves = [s.detective_positions[idx]]  # stuck — stay put
             result.append(moves)
