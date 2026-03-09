@@ -109,7 +109,7 @@ class GameEngine:
             return True
 
         # Survived — all rounds done and it's Mr. X's turn again.
-        if s.round_number >= s.max_rounds and s.is_mrx_turn:
+        if s.round_number > s.max_rounds and s.is_mrx_turn:
             s.game_over = True
             s.mrx_caught = False
             return True
@@ -156,7 +156,6 @@ class GameEngine:
 
     def _step_mrx(self) -> int:
         s = self.state
-        s.round_number += 1
 
         valid = self.get_valid_moves(s.mrx_position, s.detective_positions)
         if not valid:
@@ -202,6 +201,9 @@ class GameEngine:
 
         # Keep positions sorted (detectives are interchangeable).
         s.detective_positions.sort()
+
+        # Round complete — increment round number.
+        s.round_number += 1
 
         # Advance to Mr. X's turn.
         s.current_player = "mrx"

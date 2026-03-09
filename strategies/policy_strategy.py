@@ -1,12 +1,7 @@
 """Strategy that plays from a precomputed full-state policy map.
 
-Important
----------
-The **engine** increments ``round_number`` at the start of
-``_step_mrx`` — *before* calling ``choose_move``.  The **solver**,
-however, records Mr. X decisions at the *pre-increment* round number.
-Both policy strategy classes therefore compensate by looking up Mr. X
-states with ``round_number - 1``.
+Policy keys do not include the round number — they are purely
+positional: (current_player, mrx_position, detective_positions).
 """
 
 from __future__ import annotations
@@ -15,22 +10,14 @@ from typing import Dict, List, Tuple
 
 from game.board import Board
 from game.state import GameState
-from solver.exhaustive_solver import SolverState
+from old_solvers.exhaustive_solver import SolverState
 from strategies.base import Strategy
 
 
 def _policy_lookup_state(state: GameState) -> SolverState:
-    """Build the ``SolverState`` key that the solver would have used.
-
-    For Mr. X turns the engine has already bumped ``round_number`` by 1,
-    so we subtract it back to match the solver's indexing.  Detective
-    turns are unaffected (the engine does not touch round_number there).
-    """
-    rn = state.round_number
-    if state.current_player == "mrx":
-        rn -= 1
+    """Build the ``SolverState`` key that the solver would have used."""
     return SolverState(
-        round_number=rn,
+        round_number=0,  # round not used in policy keys
         current_player=state.current_player,
         mrx_position=state.mrx_position,
         detective_positions=tuple(state.detective_positions),
@@ -103,7 +90,7 @@ class SerializedPolicyStrategy(Strategy):
     """Strategy backed by serialized keys dumped via --dump-policy.
 
     Expected key format:
-        r=<round>|p=<player>|x=<mrx>|d=<d1,d2,...>
+        p=<player>|x=<mrx>|d=<d1,d2,...>
 
     Parameters
     ----------
@@ -130,7 +117,7 @@ class SerializedPolicyStrategy(Strategy):
     def _state_to_key(state: GameState) -> str:
         s = _policy_lookup_state(state)
         return (
-            f"r={s.round_number}|p={s.current_player}|"
+            f"p={s.current_player}|"
             f"x={s.mrx_position}|d={','.join(map(str, s.detective_positions))}"
         )
 

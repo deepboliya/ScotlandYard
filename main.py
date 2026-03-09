@@ -28,56 +28,23 @@ from game.engine import GameEngine
 from strategies.random_strategy import RandomStrategy
 from strategies.human import HumanStrategy
 from strategies.policy_strategy import PolicyStrategy, SerializedPolicyStrategy
-from solver.exhaustive_solver import SolverState, solve_mrx_forced_escape
+from old_solvers.exhaustive_solver import SolverState, solve_mrx_forced_escape
 
 
-def _lookup_survival_depth(state: GameState, survival_depths: dict | None) -> int | None:
-    """Look up survival depth exactly matching the given game state."""
-    if survival_depths is None:
-        return None
-    key_obj = SolverState(
-        round_number=state.round_number,
-        current_player=state.current_player,
-        mrx_position=state.mrx_position,
-        detective_positions=tuple(sorted(state.detective_positions)),
-    )
-
-    # In-memory solver uses SolverState keys; loaded JSON uses string keys.
-    depth = survival_depths.get(key_obj)
-    if depth is not None:
-        return depth
-
-    depth = survival_depths.get(_state_to_key(key_obj))
-    if depth is not None:
-        return depth
-
-    return None
-
-
-def _make_move_logger(state: GameState, survival_depths: dict | None = None):
-    """Return an *on_move* callback that prints round & survival depth."""
+def _make_move_logger(state: GameState):
+    """Return an *on_move* callback that prints round info."""
 
     def _log_move(player_id: str, from_node: int, to_node: int) -> None:
         label = player_id.replace("_", " ").title()
         arrow = "→" if from_node != to_node else "⊘ (stuck)"
-
-        parts = [f"R{state.round_number:>2}"]
-        depth = _lookup_survival_depth(state, survival_depths)
-        if depth is not None:
-            remaining = depth - state.round_number
-            parts.append(f"SD={depth}(+{remaining})")
-        elif survival_depths is not None:
-            parts.append("SD=?")
-
-        tag = " | ".join(parts)
-        print(f"  [{tag}] {label}: {from_node} {arrow} {to_node}")
+        print(f"  [R{state.round_number:>2}] {label}: {from_node} {arrow} {to_node}")
 
     return _log_move
 
 
 def _state_to_key(state: SolverState) -> str:
     return (
-        f"r={state.round_number}|p={state.current_player}|"
+        f"p={state.current_player}|"
         f"x={state.mrx_position}|d={','.join(map(str, state.detective_positions))}"
     )
 
@@ -85,14 +52,13 @@ def _state_to_key(state: SolverState) -> str:
 def _load_policy_bundle(path: str, board_id: str) -> tuple[
     dict[str, int],
     dict[str, list],
-    dict[str, int],
     int,
     list[int],
     int,
 ]:
     """Load policy + board configuration from JSON.
 
-    Returns ``(mrx_policy, detective_policy, survival_depths,
+    Returns ``(mrx_policy, detective_policy,
     mrx_start, detective_starts, max_rounds)``.
     """
     with open(path, "r", encoding="utf-8") as f:
@@ -121,12 +87,10 @@ def _load_policy_bundle(path: str, board_id: str) -> tuple[
         raise ValueError("Policy JSON has no valid Mr. X policy entries.")
 
     det_out = data.get("detective_policy", {})
-    survival_depths_out = data.get("survival_depths", {})
 
     return (
         mrx_out,
         det_out,
-        survival_depths_out,
         mrx_start,
         detective_starts,
         max_rounds,
@@ -249,7 +213,6 @@ def main() -> None:
 
     loaded_policy: dict[str, int] | None = None
     loaded_det_policy: dict[str, list] | None = None
-    loaded_survival_depths: dict[str, int] | None = None
     mrx_start = args.mrx
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
@@ -263,7 +226,6 @@ def main() -> None:
             (
                 loaded_policy,
                 loaded_det_policy,
-                loaded_survival_depths,
                 mrx_start,
                 detective_starts,
                 max_rounds,
@@ -294,11 +256,6 @@ def main() -> None:
                 f"mrx={mrx_start}, detectives={detective_starts}, "
                 f"max_rounds={max_rounds}"
             )
-            if loaded_survival_depths:
-                print(
-                    "Loaded per-state survival depths from policy file: "
-                    f"{len(loaded_survival_depths)} states"
-                )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"Error loading --policy-file: {exc}")
             sys.exit(1)
@@ -327,19 +284,11 @@ def main() -> None:
         result = solve_mrx_forced_escape(board, state)
         solve_time_s = perf_counter() - t0
         start_key = SolverState.from_game_state(state)
-        guaranteed_survival_depth = result.survival_depths.get(
-            start_key, state.round_number,
-        )
 
         print("\n=== Exhaustive Adversarial Solve ===")
         print(f"Solve time: {solve_time_s:.6f} s")
         print(f"States evaluated: {result.states_evaluated}")
         print(f"Mr. X policy size: {len(result.policy)}")
-        print(f"Guaranteed survival depth: {guaranteed_survival_depth}")
-        print(
-            f"Guaranteed survival rounds from start: "
-            f"{guaranteed_survival_depth - state.round_number}"
-        )
         print(
             "Forced escape:",
             "YES" if result.forced_escape else "NO",
@@ -361,10 +310,6 @@ def main() -> None:
                 _state_to_key(k): list(v)
                 for k, v in result.detective_policy.items()
             }
-            serialised_survival_depths = {
-                _state_to_key(k): v
-                for k, v in result.survival_depths.items()
-            }
             serialised = {
                 "format": "scotlandyard-policy-v2",
                 "board": board_id,
@@ -375,19 +320,13 @@ def main() -> None:
                 },
                 "solver": {
                     "forced_escape": result.forced_escape,
-                    "guaranteed_survival_depth": guaranteed_survival_depth,
-                    "guaranteed_survival_rounds": (
-                        guaranteed_survival_depth - state.round_number
-                    ),
                     "solve_time_seconds": solve_time_s,
                     "states_evaluated": result.states_evaluated,
                     "policy_size": len(result.policy),
                     "detective_policy_size": len(result.detective_policy),
-                    "survival_depths_size": len(result.survival_depths),
                 },
                 "policy": serialised_policy,
                 "detective_policy": serialised_det_policy,
-                "survival_depths": serialised_survival_depths,
             }
             with open(dump_path, "w", encoding="utf-8") as f:
                 _write_compact_json(f, serialised)
@@ -397,11 +336,8 @@ def main() -> None:
 
     # ── text-only mode ──────────────────────────────────────────────────
     if args.no_viz:
-        survival_depths = None
-
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            survival_depths = loaded_survival_depths
             print("Using stored Mr. X policy from file.")
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
@@ -415,7 +351,7 @@ def main() -> None:
             )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state, survival_depths)
+        log = _make_move_logger(state)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
 
@@ -470,18 +406,15 @@ def main() -> None:
         viz.run_interactive()
 
     elif args.mode == "play-detective":
-        survival_depths = None
-
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            survival_depths = loaded_survival_depths
             print("Using stored Mr. X policy from file.")
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
             print("No policy file; Mr. X plays randomly.")
 
         det_strat = HumanStrategy()
-        log = _make_move_logger(state, survival_depths)
+        log = _make_move_logger(state)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
         viz = GameVisualizer(
@@ -489,7 +422,6 @@ def main() -> None:
             mode_label="Play as Detectives",
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strat),
-            survival_depths=survival_depths,
             hint_policy=hint_policy,
         )
 
@@ -503,11 +435,8 @@ def main() -> None:
         viz.run_interactive()
 
     else:
-        survival_depths = None
-
         if loaded_policy is not None:
             mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            survival_depths = loaded_survival_depths
             print("Using stored Mr. X policy from file.")
         else:
             mrx_strat = RandomStrategy(seed=args.seed)
@@ -521,7 +450,7 @@ def main() -> None:
             )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state, survival_depths)
+        log = _make_move_logger(state)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
         viz = GameVisualizer(
@@ -529,7 +458,6 @@ def main() -> None:
             mode_label="Observer",
             mrx_policy_label=_describe_strategy(mrx_strat),
             detective_policy_label=_describe_detective_strategies(det_strat),
-            survival_depths=survival_depths,
             hint_policy=hint_policy,
         )
 

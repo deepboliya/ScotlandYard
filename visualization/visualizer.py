@@ -17,7 +17,6 @@ import networkx as nx
 from typing import List, Optional
 
 from game.engine import GameEngine
-from solver.exhaustive_solver import SolverState
 
 
 class GameVisualizer:
@@ -52,14 +51,12 @@ class GameVisualizer:
         mode_label: str = "Unknown",
         mrx_policy_label: str = "Unknown",
         detective_policy_label: str = "Unknown",
-        survival_depths: dict | None = None,
         hint_policy: dict | None = None,
     ):
         self.engine = engine
         self.mode_label = mode_label
         self.mrx_policy_label = mrx_policy_label
         self.detective_policy_label = detective_policy_label
-        self.survival_depths = survival_depths
         self.hint_policy = hint_policy
 
         # networkx graph (purely for drawing)
@@ -227,16 +224,10 @@ class GameVisualizer:
         )
 
         # info bar
-        depth_str = ""
-        if self.survival_depths is not None:
-            depth = self._lookup_survival_depth(s)
-            if depth is not None:
-                depth_str = f"  │  Survival depth: {depth}"
         info = (
             f"Mr. X: node {s.mrx_position}  │  "
             f"Detectives: {s.detective_positions}  │  "
             f"Round {s.round_number}/{s.max_rounds}"
-            f"{depth_str}"
         )
         self._fig_texts.append(self.fig.text(
             0.5, 0.01, info,
@@ -311,67 +302,6 @@ class GameVisualizer:
         self.fig.tight_layout()
         self.fig.canvas.draw_idle()
 
-    # ── survival depth lookup ────────────────────────────────────────────
-
-    def _lookup_survival_depth(self, s) -> int | None:
-        """Look up the Mr. X survival depth for the current game state.
-        
-        The solver stores states as (round, player, mrx_pos, det_pos).
-        
-        After a move completes, the engine state matches the solver exactly.
-        During interactive input (waiting for Mr. X to choose), the engine
-        has already incremented round_number but position is still old,
-        so we fall back to rn-1 if exact match fails.
-        """
-        if self.survival_depths is None:
-            return None
-
-        rn = s.round_number
-        det_pos = tuple(sorted(s.detective_positions))
-
-        # Always try exact match first
-        key = SolverState(
-            round_number=rn,
-            current_player=s.current_player,
-            mrx_position=s.mrx_position,
-            detective_positions=det_pos,
-        )
-        depth = self.survival_depths.get(key)
-        if depth is not None:
-            return depth
-
-        # Loaded JSON policy stores string keys.
-        key_str = (
-            f"r={rn}|p={s.current_player}|x={s.mrx_position}|"
-            f"d={','.join(map(str, det_pos))}"
-        )
-        depth = self.survival_depths.get(key_str)
-        if depth is not None:
-            return depth
-
-        # Fallback: during interactive Mr. X input, engine round is +1
-        # but position is still old. Try rn-1.
-        if s.current_player == "mrx" and rn > 0:
-            key_adj = SolverState(
-                round_number=rn - 1,
-                current_player="mrx",
-                mrx_position=s.mrx_position,
-                detective_positions=det_pos,
-            )
-            depth = self.survival_depths.get(key_adj)
-            if depth is not None:
-                return depth
-
-            key_adj_str = (
-                f"r={rn - 1}|p=mrx|x={s.mrx_position}|"
-                f"d={','.join(map(str, det_pos))}"
-            )
-            depth = self.survival_depths.get(key_adj_str)
-            if depth is not None:
-                return depth
-
-        return None
-
     # Sentinel: policy is active but state not found
     _HINT_MISSING = -1
 
@@ -390,21 +320,11 @@ class GameVisualizer:
         if s.current_player != "mrx":
             return None
 
-        rn = s.round_number
         det_str = ",".join(map(str, sorted(s.detective_positions)))
-
-        # Try exact match first
-        key = f"r={rn}|p={s.current_player}|x={s.mrx_position}|d={det_str}"
+        key = f"p={s.current_player}|x={s.mrx_position}|d={det_str}"
         move = self.hint_policy.get(key)
         if move is not None:
             return move
-
-        # Fallback for interactive Mr. X input phase
-        if s.current_player == "mrx" and rn > 0:
-            key_adj = f"r={rn - 1}|p=mrx|x={s.mrx_position}|d={det_str}"
-            move = self.hint_policy.get(key_adj)
-            if move is not None:
-                return move
 
         return self._HINT_MISSING
 

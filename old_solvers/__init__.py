@@ -1,6 +1,6 @@
 """Exhaustive game-theoretic solvers for Scotland Yard."""
 
-from solver.exhaustive_solver import (
+from old_solvers.exhaustive_solver import (
     ExhaustiveResult,
     SolverState,
     solve_mrx_forced_escape,

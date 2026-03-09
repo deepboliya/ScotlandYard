@@ -14,7 +14,7 @@ class GameState:
     Attributes:
         mrx_position:       Current node of Mr. X.
         detective_positions: Current nodes of each detective.
-        round_number:       Current round (0 = game hasn't started).
+        round_number:       Current round (starts at 1, incremented after detectives play).
         current_player:     ``"mrx"`` or ``"detectives"``.
         mrx_history:        Mr. X's position after each round.
         reveal_rounds:      Rounds on which Mr. X must reveal his position.
@@ -25,7 +25,7 @@ class GameState:
 
     mrx_position: int
     detective_positions: List[int]
-    round_number: int = 0
+    round_number: int = 1
     current_player: str = "mrx"
 
     def __post_init__(self):
