@@ -533,10 +533,10 @@ def main() -> None:
             hint_policy=hint_policy,
         )
 
-        print("╔══════════════════════════════════════════╗")
-        print("║   Scotland Yard — Observer Mode          ║")
-        print("║   [N] Step  [R] Round  [A] Auto  [Q] Quit║")
-        print("╚══════════════════════════════════════════╝\n")
+        print("╔═══════════════════════════════════════════════════╗")
+        print("║   Scotland Yard — Observer Mode                   ║")
+        print("║   [N] Step [R] Round [B] Undo [A] Auto [Q] Quit   ║")
+        print("╚═══════════════════════════════════════════════════╝\n")
         viz.run()
 
 

@@ -274,9 +274,9 @@ class GameVisualizer:
 
         # help bar
         if self._valid_moves:
-            help_txt = "Click a green node to move  │  [Q] Quit"
+            help_txt = "Click a green node to move  │  [B] Undo  │  [Q] Quit"
         else:
-            help_txt = "[N] Step  [R] Round  [A] Auto  [Q] Quit"
+            help_txt = "[N] Step  [R] Round  [B] Undo  [A] Auto  [Q] Quit"
         self._fig_texts.append(self.fig.text(
             0.99, 0.01, help_txt,
             ha="right", va="bottom",
@@ -438,6 +438,9 @@ class GameVisualizer:
         elif event.key == "r":
             if not self.engine.state.game_over:
                 self.engine.play_round()
+                self.draw()
+        elif event.key == "b":
+            if self.engine.undo():
                 self.draw()
         elif event.key == "a":
             self._auto_play()

@@ -46,6 +46,7 @@ class GameEngine:
         self.mrx_strategy = mrx_strategy
         self.detective_strategy = detective_strategy
         self.on_move = on_move
+        self._history: List[GameState] = []  # snapshots for undo
 
     # ---- move helpers ---------------------------------------------------
 
@@ -135,6 +136,9 @@ class GameEngine:
         if s.game_over or self._check_game_over():
             return None
 
+        # Save snapshot before mutating state (for undo).
+        self._history.append(s.copy())
+
         if s.is_mrx_turn:
             move = self._step_mrx()
         else:
@@ -142,6 +146,13 @@ class GameEngine:
 
         self._check_game_over()
         return move
+
+    def undo(self) -> bool:
+        """Undo the last step.  Returns ``True`` if successful."""
+        if not self._history:
+            return False
+        self.state = self._history.pop()
+        return True
 
     def _step_mrx(self) -> int:
         s = self.state
