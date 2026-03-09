@@ -529,13 +529,11 @@ int main(int argc, char *argv[]) {
 
     bool forced_escape = (guaranteed >= MAX_ROUNDS);
 
-    cout << "\n=== Fast Policy Solve v2 (C++) ===\n";
+    cout << "\n=== Policy Solve (C++) ===\n";
     cout << "Solve time: " << solve_s << " s\n";
-    cout << "Memo entries (unique positions): " << memo.size() << "\n";
-    cout << "  (vs v1 would have round×position entries)\n";
+    cout << "Memo entries: " << memo.size() << "\n";
     cout << "Mr. X policy size: " << mrx_policy.size() << "\n";
     cout << "Detective policy size: " << det_policy.size() << "\n";
-    cout << "Guaranteed survival (rounds from start): " << guaranteed << "\n";
     cout << "Forced escape: " << (forced_escape ? "YES" : "NO") << "\n";
 
     uint64_t start_key = encode_state(mrx_start, dets_arr, nd, true);

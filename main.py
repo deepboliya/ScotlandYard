@@ -20,7 +20,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from time import perf_counter
 
 from game.board import create_board_from_map
 from game.state import GameState
@@ -28,7 +27,7 @@ from game.engine import GameEngine
 from strategies.random_strategy import RandomStrategy
 from strategies.human import HumanStrategy
 from strategies.policy_strategy import PolicyStrategy, SerializedPolicyStrategy
-from old_solvers.exhaustive_solver import SolverState, solve_mrx_forced_escape
+
 
 
 def _make_move_logger(state: GameState):
@@ -40,13 +39,6 @@ def _make_move_logger(state: GameState):
         print(f"  [R{state.round_number:>2}] {label}: {from_node} {arrow} {to_node}")
 
     return _log_move
-
-
-def _state_to_key(state: SolverState) -> str:
-    return (
-        f"p={state.current_player}|"
-        f"x={state.mrx_position}|d={','.join(map(str, state.detective_positions))}"
-    )
 
 
 def _load_policy_bundle(path: str, board_id: str) -> tuple[
@@ -68,7 +60,7 @@ def _load_policy_bundle(path: str, board_id: str) -> tuple[
     if "config" not in data or "policy" not in data:
         raise ValueError(
             "Unsupported policy JSON format. Regenerate using "
-            "--mode solve --dump-policy <file>."
+            "the C++ solver."
         )
 
     policy_board_id = data.get("board")
@@ -120,51 +112,17 @@ def _describe_detective_strategies(det_strat) -> str:
     return _describe_strategy(det_strat)
 
 
-def _write_compact_json(f, obj: dict) -> None:
-    """Write JSON matching the C++ solver format.
-
-    Top-level and small nested objects use ``indent=2``.
-    Large dicts (policy, detective_policy) put one entry per line
-    with arrays kept on a single line (no per-element newlines).
-    """
-    f.write("{\n")
-    top_keys = sorted(obj.keys())
-    for ti, tk in enumerate(top_keys):
-        tv = obj[tk]
-        comma = ",\n" if ti < len(top_keys) - 1 else "\n"
-        if type(tv) is dict and len(tv) > 20:
-            # Large dict — one entry per line, inline arrays
-            f.write(f"  {json.dumps(tk)}: {{\n")
-            items = sorted(tv.items())
-            for ii, (ik, iv) in enumerate(items):
-                ic = ",\n" if ii < len(items) - 1 else "\n"
-                f.write(f"    {json.dumps(ik)}: {json.dumps(iv, separators=(', ', ': '))}{ic}")
-            f.write(f"  }}{comma}")
-        elif type(tv) is dict:
-            # Small dict — indent=2 style, inline values
-            f.write(f"  {json.dumps(tk)}: {{\n")
-            items = sorted(tv.items())
-            for ii, (ik, iv) in enumerate(items):
-                ic = ",\n" if ii < len(items) - 1 else "\n"
-                f.write(f"    {json.dumps(ik)}: {json.dumps(iv, separators=(', ', ': '))}{ic}")
-            f.write(f"  }}{comma}")
-        else:
-            f.write(f"  {json.dumps(tk)}: {json.dumps(tv, separators=(', ', ': '))}{comma}")
-    f.write("}\n")
-
-
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scotland Yard"
     )
     parser.add_argument(
         "--mode",
-        choices=["auto", "play-mrx", "play-detective", "solve"],
+        choices=["auto", "play-mrx", "play-detective"],
         default="auto",
         help=(
             "auto: watch AI play. play-mrx: play as Mr. X. "
-            "play-detective: play as detectives. "
-            "solve: exhaustive adversarial solve"
+            "play-detective: play as detectives."
         ),
     )
     parser.add_argument("--map", type=str, default="first50",
@@ -180,11 +138,6 @@ def main() -> None:
     parser.add_argument("--no-viz", action="store_true",
                         help="Run without visualisation (text only)")
     parser.add_argument(
-        "--dump-policy",
-        action="store_true",
-        help="Write solved Mr. X policy to auto-named JSON file (<map>_xX_dX_X_rX.json)",
-    )
-    parser.add_argument(
         "--policy-file",
         type=str,
         default=None,
@@ -199,10 +152,6 @@ def main() -> None:
         help="Highlight the optimal move from --policy-file in light yellow",
     )
     args = parser.parse_args()
-
-    if args.policy_file and args.mode == "solve":
-        print("Error: --policy-file cannot be used with --mode solve.")
-        sys.exit(1)
 
     if args.help_human and not args.policy_file:
         print("Error: --help-human requires --policy-file.")
@@ -278,61 +227,6 @@ def main() -> None:
         detective_positions=detective_starts,
         max_rounds=max_rounds,
     )
-
-    if args.mode == "solve":
-        t0 = perf_counter()
-        result = solve_mrx_forced_escape(board, state)
-        solve_time_s = perf_counter() - t0
-        start_key = SolverState.from_game_state(state)
-
-        print("\n=== Exhaustive Adversarial Solve ===")
-        print(f"Solve time: {solve_time_s:.6f} s")
-        print(f"States evaluated: {result.states_evaluated}")
-        print(f"Mr. X policy size: {len(result.policy)}")
-        print(
-            "Forced escape:",
-            "YES" if result.forced_escape else "NO",
-        )
-
-        first_move = result.policy.get(start_key)
-        if first_move is not None:
-            print(f"Recommended first move for Mr. X: {first_move}")
-
-        if args.dump_policy:
-            det_str = "_".join(map(str, state.detective_positions))
-            map_name = args.map
-            dump_path = f"{map_name}_x{state.mrx_position}_d{det_str}_r{state.max_rounds}.json"
-            serialised_policy = {
-                _state_to_key(k): v
-                for k, v in result.policy.items()
-            }
-            serialised_det_policy = {
-                _state_to_key(k): list(v)
-                for k, v in result.detective_policy.items()
-            }
-            serialised = {
-                "format": "scotlandyard-policy-v2",
-                "board": board_id,
-                "config": {
-                    "mrx_start": state.mrx_position,
-                    "detective_starts": state.detective_positions,
-                    "max_rounds": state.max_rounds,
-                },
-                "solver": {
-                    "forced_escape": result.forced_escape,
-                    "solve_time_seconds": solve_time_s,
-                    "states_evaluated": result.states_evaluated,
-                    "policy_size": len(result.policy),
-                    "detective_policy_size": len(result.detective_policy),
-                },
-                "policy": serialised_policy,
-                "detective_policy": serialised_det_policy,
-            }
-            with open(dump_path, "w", encoding="utf-8") as f:
-                _write_compact_json(f, serialised)
-            print(f"Policy written to: {dump_path}")
-
-        return
 
     # ── text-only mode ──────────────────────────────────────────────────
     if args.no_viz:

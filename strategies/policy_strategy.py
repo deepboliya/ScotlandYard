@@ -17,7 +17,6 @@ from strategies.base import Strategy
 def _policy_lookup_state(state: GameState) -> SolverState:
     """Build the ``SolverState`` key that the solver would have used."""
     return SolverState(
-        round_number=0,  # round not used in policy keys
         current_player=state.current_player,
         mrx_position=state.mrx_position,
         detective_positions=tuple(state.detective_positions),

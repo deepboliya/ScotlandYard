@@ -31,7 +31,6 @@ class SolverState:
     the same state (detectives are interchangeable).
     """
 
-    round_number: int
     current_player: str          # "mrx" or "detectives"
     mrx_position: int
     detective_positions: Tuple[int, ...]
@@ -46,7 +45,6 @@ class SolverState:
     @staticmethod
     def from_game_state(state: GameState) -> "SolverState":
         return SolverState(
-            round_number=state.round_number,
             current_player=state.current_player,
             mrx_position=state.mrx_position,
             detective_positions=tuple(state.detective_positions),
@@ -72,7 +70,7 @@ def _valid_moves(
 
 
 def _mrx_next_states(
-    board: Board, state: SolverState
+    board: Board, state: SolverState, round_number: int,
 ) -> List[Tuple[int, SolverState]]:
     """Enumerate Mr. X's legal moves as ``(move, next_state)``."""
     legal = _valid_moves(board, state.mrx_position)
@@ -84,7 +82,6 @@ def _mrx_next_states(
         (
             move,
             SolverState(
-                round_number=state.round_number + 1,
                 current_player=next_player,
                 mrx_position=move,
                 detective_positions=state.detective_positions,
@@ -95,7 +92,7 @@ def _mrx_next_states(
 
 
 def _detective_next_states(
-    board: Board, state: SolverState
+    board: Board, state: SolverState,
 ) -> List[Tuple[Tuple[int, ...], SolverState]]:
     """Enumerate all valid joint detective placements.
 
@@ -131,7 +128,6 @@ def _detective_next_states(
             (
                 combo,
                 SolverState(
-                    round_number=state.round_number,
                     current_player="mrx",
                     mrx_position=state.mrx_position,
                     detective_positions=sorted_pos,
@@ -158,40 +154,41 @@ def solve_mrx_forced_escape(
     start = SolverState.from_game_state(initial_state)
     max_rounds = initial_state.max_rounds
 
-    memo: Dict[SolverState, int] = {}
+    memo: Dict[Tuple[SolverState, int], int] = {}
     policy: Dict[SolverState, int] = {}
     detective_policy: Dict[SolverState, Tuple[int, ...]] = {}
 
-    def get_survival_depth(state: SolverState) -> int:
+    def get_survival_depth(state: SolverState, round_number: int) -> int:
         """Return the guaranteed number of rounds Mr. X survives.
 
         Minimax: Mr. X maximises, detectives minimise.
         Also records the optimal move for each side in *policy* /
         *detective_policy*.
         """
-        if state in memo:
-            return memo[state]
+        key = (state, round_number)
+        if key in memo:
+            return memo[key]
 
         # ── terminal checks ─────────────────────────────────────────
         if state.mrx_position in state.detective_positions:
-            memo[state] = state.round_number
-            return state.round_number
+            memo[key] = round_number
+            return round_number
 
-        if state.round_number >= max_rounds and state.current_player == "mrx":
-            memo[state] = max_rounds
+        if round_number >= max_rounds and state.current_player == "mrx":
+            memo[key] = max_rounds
             return max_rounds
 
         # ── Mr. X turn (maximise) ──────────────────────────────────
         if state.current_player == "mrx":
-            children = _mrx_next_states(board, state)
+            children = _mrx_next_states(board, state, round_number)
             if not children:
-                memo[state] = state.round_number
-                return state.round_number
+                memo[key] = round_number
+                return round_number
 
             best_depth = -1
             best_move = children[0][0]
             for move, nxt in children:
-                d = get_survival_depth(nxt)
+                d = get_survival_depth(nxt, round_number + 1)
                 if d > best_depth:
                     best_depth = d
                     best_move = move
@@ -199,35 +196,35 @@ def solve_mrx_forced_escape(
                     break  # can't do better than surviving all rounds
 
             policy[state] = best_move
-            memo[state] = best_depth
+            memo[key] = best_depth
             return best_depth
 
         # ── Detective turn (minimise) ──────────────────────────────
         children = _detective_next_states(board, state)
         if not children:
             # No valid joint placement (shouldn't happen normally)
-            memo[state] = max_rounds
+            memo[key] = max_rounds
             return max_rounds
 
         worst_depth = max_rounds + 1
         worst_combo = children[0][0]
         for combo, nxt in children:
-            d = get_survival_depth(nxt)
+            d = get_survival_depth(nxt, round_number)
             if d < worst_depth:
                 worst_depth = d
                 worst_combo = combo
-            if worst_depth == state.round_number:
+            if worst_depth == round_number:
                 break  # instant capture — can't do better
 
         detective_policy[state] = worst_combo
-        memo[state] = worst_depth
+        memo[key] = worst_depth
         return worst_depth
 
-    guaranteed_survival = get_survival_depth(start)
+    guaranteed_survival = get_survival_depth(start, initial_state.round_number)
     return ExhaustiveResult(
         forced_escape=(guaranteed_survival >= max_rounds),
         policy=policy,
         detective_policy=detective_policy,
-        survival_depths=memo,
+        survival_depths={},
         states_evaluated=len(memo),
     )
