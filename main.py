@@ -41,17 +41,18 @@ def _make_move_logger(state: GameState):
     return _log_move
 
 
-def _load_policy_bundle(path: str, board_id: str) -> tuple[
+def _load_policy_bundle(path: str, board_id: str | None = None) -> tuple[
     dict[str, int],
     dict[str, list],
     int,
     list[int],
     int,
+    str | None,
 ]:
     """Load policy + board configuration from JSON.
 
     Returns ``(mrx_policy, detective_policy,
-    mrx_start, detective_starts, max_rounds)``.
+    mrx_start, detective_starts, max_rounds, board_path)``.
     """
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
@@ -64,7 +65,7 @@ def _load_policy_bundle(path: str, board_id: str) -> tuple[
         )
 
     policy_board_id = data.get("board")
-    if policy_board_id is not None and policy_board_id != board_id:
+    if board_id is not None and policy_board_id is not None and policy_board_id != board_id:
         raise ValueError(
             f"Policy board '{policy_board_id}' is incompatible with current board '{board_id}'."
         )
@@ -86,6 +87,7 @@ def _load_policy_bundle(path: str, board_id: str) -> tuple[
         mrx_start,
         detective_starts,
         max_rounds,
+        policy_board_id,
     )
 
 
@@ -157,17 +159,20 @@ def main() -> None:
         print("Error: --help-human requires --policy-file.")
         sys.exit(1)
 
-    map_path = f"maps/{args.map}.txt"
-    board_id = map_path
-
     loaded_policy: dict[str, int] | None = None
     loaded_det_policy: dict[str, list] | None = None
     mrx_start = args.mrx
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
 
+    # Determine map_path: use policy file's board if --policy-file given,
+    # otherwise fall back to --map CLI argument.
     if args.policy_file:
         try:
+            # If --map was explicitly passed, validate against the policy
+            explicit_map = _cli_flag_present("--map")
+            cli_board_id = f"maps/{args.map}.txt" if explicit_map else None
+
             cli_mrx = args.mrx
             cli_detectives = list(args.detectives)
             cli_max_rounds = args.max_rounds
@@ -178,7 +183,17 @@ def main() -> None:
                 mrx_start,
                 detective_starts,
                 max_rounds,
-            ) = _load_policy_bundle(args.policy_file, board_id)
+                policy_board_path,
+            ) = _load_policy_bundle(args.policy_file, cli_board_id)
+
+            if policy_board_path is not None:
+                map_path = policy_board_path
+            elif explicit_map:
+                map_path = f"maps/{args.map}.txt"
+            else:
+                map_path = f"maps/{args.map}.txt"
+
+            board_id = map_path
 
             mismatches: list[str] = []
             if _cli_flag_present("--mrx") and cli_mrx != mrx_start:
@@ -202,12 +217,15 @@ def main() -> None:
             print(f"Loaded policy file: {args.policy_file}")
             print(
                 "Using configuration from policy file: "
-                f"mrx={mrx_start}, detectives={detective_starts}, "
+                f"map={map_path}, mrx={mrx_start}, detectives={detective_starts}, "
                 f"max_rounds={max_rounds}"
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
             print(f"Error loading --policy-file: {exc}")
             sys.exit(1)
+    else:
+        map_path = f"maps/{args.map}.txt"
+        board_id = map_path
 
     # ── board & validation ──────────────────────────────────────────────
     board = create_board_from_map(map_path)
