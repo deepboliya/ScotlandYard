@@ -261,10 +261,15 @@ class GameVisualizer:
             if surv_now is not None:
                 max_r = s.max_rounds
                 whose = "Mr. X" if s.current_player == "mrx" else "Detectives"
-                if surv_now >= max_r:
-                    surv_line = f"Mr. X guaranteed escape ({surv_now}/{max_r} rounds)"
+                # Convert relative survival to absolute total rounds
+                if s.current_player == "mrx":
+                    absolute = (s.round_number - 1) + surv_now
                 else:
-                    surv_line = f"Mr. X survives {surv_now}/{max_r} rounds"
+                    absolute = s.round_number + surv_now
+                if absolute >= max_r:
+                    surv_line = f"Mr. X guaranteed escape ({absolute}/{max_r} rounds)"
+                else:
+                    surv_line = f"Mr. X survives {absolute}/{max_r} rounds"
                 policy_text += f"\n{surv_line}"
                 policy_text += f"\nFrom here: X can survive {surv_now} more round{'s' if surv_now != 1 else ''} ({whose}'s turn)"
             elif self.guaranteed_survival is not None:
@@ -392,6 +397,13 @@ class GameVisualizer:
                 self.draw()
         elif event.key == "b":
             if self.engine.undo():
+                # Refresh valid-move highlights for the restored state
+                s = self.engine.state
+                if not s.game_over and s.is_mrx_turn:
+                    self._valid_moves = self.engine.get_mrx_valid_moves()
+                else:
+                    self._valid_moves = []
+                self._selected_node = None
                 self.draw()
         elif event.key == "a":
             self._auto_play()
