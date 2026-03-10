@@ -6,6 +6,28 @@ All notable changes to the Scotland Yard project are documented here.
 
 ## [Unreleased] — 2026-03-10
 
+### Dynamic Per-State Survival Display
+
+The solver now exports **per-state survival values** from the minimax
+memo table alongside the policy.  At every board position during a game,
+the UI and text log show how many more rounds Mr. X can survive under
+optimal play from that exact position.
+
+- **C++ solver**: each policy record (both Mr. X and detective entries)
+  now carries a survival byte.  JSON output includes a top-level
+  `"survival"` dict; binary records grow by 1 byte each
+  (mrx: nd+3 B, det: 2·nd+2 B).
+- **Python loaders**: `_load_binary_policy_bundle` and
+  `_load_json_policy_bundle` read survival data and expose it via a
+  `survival_fn(state)` callable.
+- **Visualiser**: the info panel shows a live line such as
+  "From here: X survives 7 more rounds (Mr. X's turn)" that updates
+  after every step.
+- **Text mode (`--no-viz`)**: the move logger prints
+  `[X survives: N]` after each move.
+- Backward compatible: old policy files without survival data still
+  load and play; the survival line simply isn't shown.
+
 ### Guaranteed Survival Stored in Policy & Displayed on Screen
 
 The solver now computes and stores the **guaranteed survival rounds** —

@@ -36,13 +36,18 @@ from strategies.policy_strategy import (
 
 
 
-def _make_move_logger(state: GameState):
+def _make_move_logger(state: GameState, survival_fn=None):
     """Return an *on_move* callback that prints round info."""
 
     def _log_move(player_id: str, from_node: int, to_node: int) -> None:
         label = player_id.replace("_", " ").title()
         arrow = "→" if from_node != to_node else "⊘ (stuck)"
-        print(f"  [R{state.round_number:>2}] {label}: {from_node} {arrow} {to_node}")
+        surv_str = ""
+        if survival_fn is not None:
+            surv = survival_fn(state)
+            if surv is not None:
+                surv_str = f"  [X survives: {surv}]"
+        print(f"  [R{state.round_number:>2}] {label}: {from_node} {arrow} {to_node}{surv_str}")
 
     return _log_move
 
@@ -62,12 +67,15 @@ def _load_binary_policy_bundle(
     str | None,
     int,
     int | None,
+    dict[tuple, int],
+    dict[tuple, int],
 ]:
     """Load policy from compact binary .bin file.
 
     Returns ``(mrx_policy, detective_policy,
     mrx_start, detective_starts, max_rounds, board_path,
-    num_detectives, guaranteed_survival)``.
+    num_detectives, guaranteed_survival,
+    mrx_survival, det_survival)``.
     """
     t0 = time.perf_counter()
     with open(path, "rb") as f:
@@ -105,27 +113,37 @@ def _load_binary_policy_bundle(
     num_mrx = _read_u32_le(raw, offset)
     offset += 4
 
+    has_mrx_survival = (mrx_rec_len >= nd + 3)
     mrx_policy: dict[tuple, int] = {}
+    mrx_survival: dict[tuple, int] = {}
     for _ in range(num_mrx):
         rec = raw[offset : offset + mrx_rec_len]
         offset += mrx_rec_len
         x = rec[0]
         dets = tuple(rec[1 : 1 + nd])
         move = rec[1 + nd]
-        mrx_policy[(x, *dets)] = move
+        key = (x, *dets)
+        mrx_policy[key] = move
+        if has_mrx_survival:
+            mrx_survival[key] = rec[2 + nd]
 
     # ── Detective policy ────────────────────────────────────────
     num_det = _read_u32_le(raw, offset)
     offset += 4
 
+    has_det_survival = (det_rec_len >= 2 * nd + 2)
     det_policy: dict[tuple, list[int]] = {}
+    det_survival: dict[tuple, int] = {}
     for _ in range(num_det):
         rec = raw[offset : offset + det_rec_len]
         offset += det_rec_len
         x = rec[0]
         dets = tuple(rec[1 : 1 + nd])
         moves = list(rec[1 + nd : 1 + 2 * nd])
-        det_policy[(x, *dets)] = moves
+        key = (x, *dets)
+        det_policy[key] = moves
+        if has_det_survival:
+            det_survival[key] = rec[1 + 2 * nd]
 
     t1 = time.perf_counter()
     print(
@@ -143,6 +161,8 @@ def _load_binary_policy_bundle(
         policy_board_id,
         nd,
         guaranteed_survival,
+        mrx_survival,
+        det_survival,
     )
 
 
@@ -156,12 +176,13 @@ def _load_json_policy_bundle(
     int,
     str | None,
     int | None,
+    dict[str, int],
 ]:
     """Load policy + board configuration from JSON.
 
     Returns ``(mrx_policy, detective_policy,
     mrx_start, detective_starts, max_rounds, board_path,
-    guaranteed_survival)``.
+    guaranteed_survival, survival)``.
     """
     t0 = time.perf_counter()
     with open(path, "r", encoding="utf-8") as f:
@@ -192,6 +213,7 @@ def _load_json_policy_bundle(
 
     det_out = data.get("detective_policy", {})
     guaranteed_survival = config.get("guaranteed_survival")
+    survival = data.get("survival", {})
 
     print(
         f"  JSON policy loaded: {len(mrx_out):,} mrx + "
@@ -206,6 +228,7 @@ def _load_json_policy_bundle(
         max_rounds,
         policy_board_id,
         guaranteed_survival,
+        survival,
     )
 
 
@@ -284,6 +307,7 @@ def main() -> None:
     loaded_det_policy = None
     is_binary_policy = False
     guaranteed_survival: int | None = None
+    survival_fn = None
     mrx_start = args.mrx
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
@@ -310,6 +334,8 @@ def main() -> None:
                     policy_board_path,
                     _nd,
                     guaranteed_survival,
+                    _mrx_survival,
+                    _det_survival,
                 ) = _load_binary_policy_bundle(args.policy_file, cli_board_id)
                 is_binary_policy = True
             else:
@@ -321,6 +347,7 @@ def main() -> None:
                     max_rounds,
                     policy_board_path,
                     guaranteed_survival,
+                    _survival_dict,
                 ) = _load_json_policy_bundle(args.policy_file, cli_board_id)
 
             if policy_board_path is not None:
@@ -350,6 +377,22 @@ def main() -> None:
                     "Passed arguments do not match policy config: "
                     + "; ".join(mismatches)
                 )
+
+            # Build per-state survival lookup
+            if is_binary_policy:
+                _ms, _ds = _mrx_survival, _det_survival
+                if _ms or _ds:
+                    def _surv_fn(st, ms=_ms, ds=_ds):
+                        k = (st.mrx_position, *st.detective_positions)
+                        return ms.get(k) if st.current_player == "mrx" else ds.get(k)
+                    survival_fn = _surv_fn
+            else:
+                _sd = _survival_dict
+                if _sd:
+                    def _surv_fn(st, sd=_sd):
+                        d = ",".join(map(str, st.detective_positions))
+                        return sd.get(f"p={st.current_player}|x={st.mrx_position}|d={d}")
+                    survival_fn = _surv_fn
 
             print(f"Loaded policy file: {args.policy_file}")
             surv_str = (
@@ -414,7 +457,7 @@ def main() -> None:
                 )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state)
+        log = _make_move_logger(state, survival_fn)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
 
@@ -454,7 +497,7 @@ def main() -> None:
                 )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state)
+        log = _make_move_logger(state, survival_fn)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
         viz = GameVisualizer(
@@ -464,6 +507,7 @@ def main() -> None:
             detective_policy_label=_describe_detective_strategies(det_strat),
             hint_policy=hint_policy,
             guaranteed_survival=guaranteed_survival,
+            survival_fn=survival_fn,
         )
 
         # connect click-to-move
@@ -488,7 +532,7 @@ def main() -> None:
             print("No policy file; Mr. X plays randomly.")
 
         det_strat = HumanStrategy()
-        log = _make_move_logger(state)
+        log = _make_move_logger(state, survival_fn)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
         viz = GameVisualizer(
@@ -498,6 +542,7 @@ def main() -> None:
             detective_policy_label=_describe_detective_strategies(det_strat),
             hint_policy=hint_policy,
             guaranteed_survival=guaranteed_survival,
+            survival_fn=survival_fn,
         )
 
         det_strat.move_selector = viz.wait_for_click
@@ -535,7 +580,7 @@ def main() -> None:
                 )
         else:
             det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state)
+        log = _make_move_logger(state, survival_fn)
         engine = GameEngine(board, state, mrx_strat, det_strat,
                             on_move=log)
         viz = GameVisualizer(
@@ -545,6 +590,7 @@ def main() -> None:
             detective_policy_label=_describe_detective_strategies(det_strat),
             hint_policy=hint_policy,
             guaranteed_survival=guaranteed_survival,
+            survival_fn=survival_fn,
         )
 
         print("╔═══════════════════════════════════════════════════╗")

@@ -53,6 +53,7 @@ class GameVisualizer:
         detective_policy_label: str = "Unknown",
         hint_policy: dict | None = None,
         guaranteed_survival: int | None = None,
+        survival_fn=None,
     ):
         self.engine = engine
         self.mode_label = mode_label
@@ -60,6 +61,7 @@ class GameVisualizer:
         self.detective_policy_label = detective_policy_label
         self.hint_policy = hint_policy
         self.guaranteed_survival = guaranteed_survival
+        self.survival_fn = survival_fn
 
         # networkx graph (purely for drawing)
         self.G = nx.Graph()
@@ -254,7 +256,26 @@ class GameVisualizer:
             f"Mr. X policy: {self.mrx_policy_label}\n"
             f"Detective policy: {self.detective_policy_label}"
         )
-        if self.guaranteed_survival is not None:
+        if self.survival_fn is not None and not s.game_over:
+            surv_now = self.survival_fn(s)
+            if surv_now is not None:
+                max_r = s.max_rounds
+                whose = "Mr. X" if s.current_player == "mrx" else "Detectives"
+                if surv_now >= max_r:
+                    surv_line = f"Mr. X guaranteed escape ({surv_now}/{max_r} rounds)"
+                else:
+                    surv_line = f"Mr. X survives {surv_now}/{max_r} rounds"
+                policy_text += f"\n{surv_line}"
+                policy_text += f"\nFrom here: X can survive {surv_now} more round{'s' if surv_now != 1 else ''} ({whose}'s turn)"
+            elif self.guaranteed_survival is not None:
+                max_r = s.max_rounds
+                gs = self.guaranteed_survival
+                if gs >= max_r:
+                    surv_line = f"Mr. X guaranteed escape ({gs}/{max_r} rounds)"
+                else:
+                    surv_line = f"Mr. X survives {gs}/{max_r} rounds (detectives win)"
+                policy_text += f"\n{surv_line}"
+        elif self.guaranteed_survival is not None:
             max_r = s.max_rounds
             gs = self.guaranteed_survival
             if gs >= max_r:

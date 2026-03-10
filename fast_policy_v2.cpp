@@ -372,6 +372,7 @@ static string json_escape(const string &s) {
 
 static map<string, int>         sorted_mrx;
 static map<string, vector<int>> sorted_det;
+static map<string, int>         sorted_survival;
 
 static void build_json_maps() {
     for (auto& [key, move] : mrx_policy) {
@@ -379,12 +380,18 @@ static void build_json_maps() {
         decode_state(key, is_x_turn, x_pos, dets, nd);
         string skey = state_to_key(is_x_turn, x_pos, dets, nd);
         sorted_mrx[skey] = move;
+        auto mit = memo.find(key);
+        if (mit != memo.end())
+            sorted_survival[skey] = mit->second.first;
     }
     for (auto& [key, moves] : det_policy) {
         bool is_x_turn; int x_pos, nd; int dets[5];
         decode_state(key, is_x_turn, x_pos, dets, nd);
         string skey = state_to_key(is_x_turn, x_pos, dets, nd);
         sorted_det[skey] = moves;
+        auto mit = memo.find(key);
+        if (mit != memo.end())
+            sorted_survival[skey] = mit->second.first;
     }
 }
 
@@ -447,7 +454,18 @@ static void write_json(const string &path,
     f << "    \"policy_size\": " << mrx_policy.size() << ",\n";
     f << "    \"solve_time_seconds\": " << solve_time_s << ",\n";
     f << "    \"states_evaluated\": " << states_evaluated << "\n";
-    f << "  }\n";
+    f << "  },\n";
+
+    f << "  \"survival\": {\n";
+    {
+        bool first = true;
+        for (auto &[k, v] : sorted_survival) {
+            if (!first) f << ",\n";
+            f << "    \"" << json_escape(k) << "\": " << v;
+            first = false;
+        }
+    }
+    f << "\n  }\n";
 
     f << "}\n";
     f.close();
@@ -462,11 +480,11 @@ static void write_json(const string &path,
 //   [4 B]   header_len      (uint32 LE)  — length of JSON header blob
 //   [hdr B] header           UTF-8 JSON  (config, solver, nd, …)
 //   [4 B]   num_mrx          (uint32 LE)
-//   [num_mrx × (nd+2) B]     sorted mrx records
-//                             each: [x, d0, d1, …, move]   (all uint8)
+//   [num_mrx × (nd+3) B]     sorted mrx records
+//                             each: [x, d0, d1, …, move, surv]  (all uint8)
 //   [4 B]   num_det          (uint32 LE)
-//   [num_det × (2nd+1) B]    sorted det records
-//                             each: [x, d0, d1, …, m0, m1, …] (all uint8)
+//   [num_det × (2nd+2) B]    sorted det records
+//                             each: [x, d0, d1, …, m0, m1, …, surv] (all uint8)
 //
 // Records are lexicographically sorted by (x, d0, d1, …) so binary
 // search is possible, but in practice we load into a hash-map.
@@ -490,18 +508,18 @@ static void write_binary(const string &path,
                           size_t states_evaluated)
 {
     int nd = (int)det_starts.size();
-    int mrx_rec_len = nd + 2;   // x + nd dets + move
-    int det_rec_len = 2 * nd + 1; // x + nd dets + nd moves
+    int mrx_rec_len = nd + 3;   // x + nd dets + move + survival
+    int det_rec_len = 2 * nd + 2; // x + nd dets + nd moves + survival
 
     // ── build sorted record vectors ────────────────────────────
     struct MrxRec {
-        uint8_t data[7]; // max 5 dets + x + move
+        uint8_t data[8]; // max 5 dets + x + move + survival
         bool operator<(const MrxRec &o) const {
             return memcmp(data, o.data, sizeof(data)) < 0;
         }
     };
     struct DetRec {
-        uint8_t data[11]; // max x + 5 dets + 5 moves
+        uint8_t data[12]; // max x + 5 dets + 5 moves + survival
         bool operator<(const DetRec &o) const {
             return memcmp(data, o.data, sizeof(data)) < 0;
         }
@@ -516,6 +534,8 @@ static void write_binary(const string &path,
         r.data[0] = (uint8_t)xp;
         for (int i = 0; i < nd2; ++i) r.data[1 + i] = (uint8_t)dets[i];
         r.data[1 + nd2] = (uint8_t)move;
+        { auto mit = memo.find(key);
+          r.data[2 + nd2] = (uint8_t)(mit != memo.end() ? mit->second.first : 0); }
         mrx_recs.push_back(r);
     }
     sort(mrx_recs.begin(), mrx_recs.end());
@@ -530,6 +550,8 @@ static void write_binary(const string &path,
         for (int i = 0; i < nd2; ++i) r.data[1 + i] = (uint8_t)dets[i];
         for (int i = 0; i < (int)moves.size(); ++i)
             r.data[1 + nd2 + i] = (uint8_t)moves[i];
+        { auto mit = memo.find(key);
+          r.data[1 + nd2 + (int)moves.size()] = (uint8_t)(mit != memo.end() ? mit->second.first : 0); }
         det_recs.push_back(r);
     }
     sort(det_recs.begin(), det_recs.end());
@@ -560,9 +582,9 @@ static void write_binary(const string &path,
     hdr << "  \"binary_layout\": {\n";
     hdr << "    \"mrx_record_bytes\": " << mrx_rec_len << ",\n";
     hdr << "    \"det_record_bytes\": " << det_rec_len << ",\n";
-    hdr << "    \"mrx_record_format\": \"[x, d0..d" << nd - 1 << ", move]\",\n";
+    hdr << "    \"mrx_record_format\": \"[x, d0..d" << nd - 1 << ", move, survival]\",\n";
     hdr << "    \"det_record_format\": \"[x, d0..d" << nd - 1
-        << ", m0..m" << nd - 1 << "]\"\n";
+        << ", m0..m" << nd - 1 << ", survival]\"\n";
     hdr << "  }\n";
     hdr << "}";
     string header_str = hdr.str();
