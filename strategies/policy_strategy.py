@@ -155,3 +155,72 @@ class SerializedPolicyStrategy(Strategy):
                 f"'{key}'"
             )
         return [min(v) for v in valid_moves_per_detective]
+
+
+class BinaryPolicyStrategy(Strategy):
+    """Strategy backed by compact binary policy data (tuple-keyed dicts).
+
+    The binary loader in ``main.py`` produces dicts keyed by tuples of
+    ``(mrx_position, det0, det1, …)`` with integer move values.
+
+    Parameters
+    ----------
+    binary_mrx_policy : dict[tuple, int]
+        Tuple-keyed Mr. X state-to-move map.
+    binary_det_policy : dict[tuple, list[int]], optional
+        Tuple-keyed detective state-to-joint-moves map.
+    strict : bool
+        If ``True``, raise ``KeyError`` on lookup miss.
+    """
+
+    def __init__(
+        self,
+        binary_mrx_policy: Dict[tuple, int],
+        binary_det_policy: Dict[tuple, List[int]] | None = None,
+        *,
+        strict: bool = False,
+    ):
+        self.mrx_policy = binary_mrx_policy
+        self.det_policy = binary_det_policy or {}
+        self.strict = strict
+
+    @staticmethod
+    def _state_to_key(state: GameState) -> tuple:
+        s = _policy_lookup_state(state)
+        return (s.mrx_position, *s.detective_positions)
+
+    def choose_move(
+        self,
+        board: Board,
+        state: GameState,
+        player_id: str,
+        valid_moves: List[int],
+    ) -> int:
+        key = self._state_to_key(state)
+        move = self.mrx_policy.get(key)
+        if move in valid_moves:
+            return move
+        if self.strict:
+            raise KeyError(
+                f"BinaryPolicyStrategy: no policy entry for key "
+                f"{key!r} (valid_moves={valid_moves})"
+            )
+        return min(valid_moves)
+
+    def choose_detective_moves(
+        self,
+        board: Board,
+        state: GameState,
+        valid_moves_per_detective: List[List[int]],
+    ) -> List[int]:
+        key = self._state_to_key(state)
+        combo = self.det_policy.get(key)
+        if combo is not None and len(combo) == len(valid_moves_per_detective):
+            if all(m in v for m, v in zip(combo, valid_moves_per_detective)):
+                return list(combo)
+        if self.strict:
+            raise KeyError(
+                f"BinaryPolicyStrategy: no detective policy entry for key "
+                f"{key!r}"
+            )
+        return [min(v) for v in valid_moves_per_detective]

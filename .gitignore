@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# ignore policy files created by solver
+*.json
+*.bin
 #vscode
 .vscode/
 # Distribution / packaging

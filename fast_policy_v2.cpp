@@ -34,6 +34,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
@@ -391,6 +392,7 @@ static void write_json(const string &path,
                         const string &map_path,
                         int mrx_start,
                         const vector<int> &det_starts,
+                        int guaranteed_survival,
                         bool forced_escape,
                         double solve_time_s,
                         size_t states_evaluated)
@@ -406,6 +408,7 @@ static void write_json(const string &path,
     for (size_t i = 0; i < det_starts.size(); ++i)
         f << (i ? ", " : "") << det_starts[i];
     f << "],\n";
+    f << "    \"guaranteed_survival\": " << guaranteed_survival << ",\n";
     f << "    \"max_rounds\": " << MAX_ROUNDS << ",\n";
     f << "    \"mrx_start\": " << mrx_start << "\n";
     f << "  },\n";
@@ -451,6 +454,145 @@ static void write_json(const string &path,
     cout << "Policy written to: " << path << "\n";
 }
 
+// ── Binary output ──────────────────────────────────────────────────────
+//
+// Compact binary policy format  "SYP1":
+//
+//   [4 B]   magic           "SYP1"
+//   [4 B]   header_len      (uint32 LE)  — length of JSON header blob
+//   [hdr B] header           UTF-8 JSON  (config, solver, nd, …)
+//   [4 B]   num_mrx          (uint32 LE)
+//   [num_mrx × (nd+2) B]     sorted mrx records
+//                             each: [x, d0, d1, …, move]   (all uint8)
+//   [4 B]   num_det          (uint32 LE)
+//   [num_det × (2nd+1) B]    sorted det records
+//                             each: [x, d0, d1, …, m0, m1, …] (all uint8)
+//
+// Records are lexicographically sorted by (x, d0, d1, …) so binary
+// search is possible, but in practice we load into a hash-map.
+
+static void write_u32_le(ofstream &f, uint32_t v) {
+    char buf[4];
+    buf[0] = (char)(v & 0xFF);
+    buf[1] = (char)((v >> 8) & 0xFF);
+    buf[2] = (char)((v >> 16) & 0xFF);
+    buf[3] = (char)((v >> 24) & 0xFF);
+    f.write(buf, 4);
+}
+
+static void write_binary(const string &path,
+                          const string &map_path,
+                          int mrx_start,
+                          const vector<int> &det_starts,
+                          int guaranteed_survival,
+                          bool forced_escape,
+                          double solve_time_s,
+                          size_t states_evaluated)
+{
+    int nd = (int)det_starts.size();
+    int mrx_rec_len = nd + 2;   // x + nd dets + move
+    int det_rec_len = 2 * nd + 1; // x + nd dets + nd moves
+
+    // ── build sorted record vectors ────────────────────────────
+    struct MrxRec {
+        uint8_t data[7]; // max 5 dets + x + move
+        bool operator<(const MrxRec &o) const {
+            return memcmp(data, o.data, sizeof(data)) < 0;
+        }
+    };
+    struct DetRec {
+        uint8_t data[11]; // max x + 5 dets + 5 moves
+        bool operator<(const DetRec &o) const {
+            return memcmp(data, o.data, sizeof(data)) < 0;
+        }
+    };
+
+    vector<MrxRec> mrx_recs;
+    mrx_recs.reserve(mrx_policy.size());
+    for (auto &[key, move] : mrx_policy) {
+        bool is_x; int xp, nd2; int dets[5];
+        decode_state(key, is_x, xp, dets, nd2);
+        MrxRec r{};
+        r.data[0] = (uint8_t)xp;
+        for (int i = 0; i < nd2; ++i) r.data[1 + i] = (uint8_t)dets[i];
+        r.data[1 + nd2] = (uint8_t)move;
+        mrx_recs.push_back(r);
+    }
+    sort(mrx_recs.begin(), mrx_recs.end());
+
+    vector<DetRec> det_recs;
+    det_recs.reserve(det_policy.size());
+    for (auto &[key, moves] : det_policy) {
+        bool is_x; int xp, nd2; int dets[5];
+        decode_state(key, is_x, xp, dets, nd2);
+        DetRec r{};
+        r.data[0] = (uint8_t)xp;
+        for (int i = 0; i < nd2; ++i) r.data[1 + i] = (uint8_t)dets[i];
+        for (int i = 0; i < (int)moves.size(); ++i)
+            r.data[1 + nd2 + i] = (uint8_t)moves[i];
+        det_recs.push_back(r);
+    }
+    sort(det_recs.begin(), det_recs.end());
+
+    // ── build JSON header ──────────────────────────────────────
+    ostringstream hdr;
+    hdr << "{\n";
+    hdr << "  \"format\": \"scotlandyard-policy-bin-v1\",\n";
+    hdr << "  \"board\": \"" << json_escape(map_path) << "\",\n";
+    hdr << "  \"config\": {\n";
+    hdr << "    \"mrx_start\": " << mrx_start << ",\n";
+    hdr << "    \"detective_starts\": [";
+    for (size_t i = 0; i < det_starts.size(); ++i)
+        hdr << (i ? ", " : "") << det_starts[i];
+    hdr << "],\n";
+    hdr << "    \"max_rounds\": " << MAX_ROUNDS << ",\n";
+    hdr << "    \"guaranteed_survival\": " << guaranteed_survival << ",\n";
+    hdr << "    \"num_detectives\": " << nd << "\n";
+    hdr << "  },\n";
+    hdr << "  \"solver\": {\n";
+    hdr << "    \"policy_size\": " << mrx_policy.size() << ",\n";
+    hdr << "    \"detective_policy_size\": " << det_policy.size() << ",\n";
+    hdr << "    \"memo_size_positions\": " << memo.size() << ",\n";
+    hdr << "    \"states_evaluated\": " << states_evaluated << ",\n";
+    hdr << "    \"solve_time_seconds\": " << solve_time_s << ",\n";
+    hdr << "    \"forced_escape\": " << (forced_escape ? "true" : "false") << "\n";
+    hdr << "  },\n";
+    hdr << "  \"binary_layout\": {\n";
+    hdr << "    \"mrx_record_bytes\": " << mrx_rec_len << ",\n";
+    hdr << "    \"det_record_bytes\": " << det_rec_len << ",\n";
+    hdr << "    \"mrx_record_format\": \"[x, d0..d" << nd - 1 << ", move]\",\n";
+    hdr << "    \"det_record_format\": \"[x, d0..d" << nd - 1
+        << ", m0..m" << nd - 1 << "]\"\n";
+    hdr << "  }\n";
+    hdr << "}";
+    string header_str = hdr.str();
+
+    // ── write file ─────────────────────────────────────────────
+    ofstream f(path, ios::binary);
+    if (!f) { cerr << "Error: cannot write " << path << "\n"; exit(1); }
+
+    f.write("SYP1", 4);
+    write_u32_le(f, (uint32_t)header_str.size());
+    f.write(header_str.data(), header_str.size());
+
+    write_u32_le(f, (uint32_t)mrx_recs.size());
+    for (auto &r : mrx_recs)
+        f.write((const char*)r.data, mrx_rec_len);
+
+    write_u32_le(f, (uint32_t)det_recs.size());
+    for (auto &r : det_recs)
+        f.write((const char*)r.data, det_rec_len);
+
+    f.close();
+
+    size_t file_size = 4 + 4 + header_str.size()
+                     + 4 + mrx_recs.size() * mrx_rec_len
+                     + 4 + det_recs.size() * det_rec_len;
+    cout << "Binary policy written to: " << path
+         << "  (" << file_size << " bytes, "
+         << (file_size / 1024) << " KB)\n";
+}
+
 // ── main ───────────────────────────────────────────────────────────────
 
 int main(int argc, char *argv[]) {
@@ -458,6 +600,7 @@ int main(int argc, char *argv[]) {
     vector<int> det_starts;
     MAX_ROUNDS = 15;
     string map_path;
+    string output_format = "binary";  // "json", "binary", or "both"
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--mrx") && i + 1 < argc) {
@@ -469,13 +612,20 @@ int main(int argc, char *argv[]) {
             MAX_ROUNDS = atoi(argv[++i]);
         } else if (!strcmp(argv[i], "--map") && i + 1 < argc) {
             map_path = argv[++i];
+        } else if (!strcmp(argv[i], "--output-format") && i + 1 < argc) {
+            output_format = argv[++i];
+            if (output_format != "json" && output_format != "binary" && output_format != "both") {
+                cerr << "Error: --output-format must be 'json', 'binary', or 'both'.\n";
+                return 1;
+            }
         }
     }
 
     if (mrx_start < 0 || det_starts.empty() || map_path.empty()) {
         cerr << "Usage: " << argv[0]
              << " --map <path> --mrx <node>"
-                " --detectives <n1> <n2> ... [--max-rounds <N>]\n";
+                " --detectives <n1> <n2> ... [--max-rounds <N>]"
+                " [--output-format json|binary|both]\n";
         return 1;
     }
 
@@ -541,13 +691,7 @@ int main(int argc, char *argv[]) {
     if (pit != mrx_policy.end())
         cout << "Recommended first move for Mr. X: " << pit->second << "\n";
 
-    // ── build JSON maps from policy tables ──────────────────────
-    cout << "Building JSON maps from policy tables..." << flush;
-    build_json_maps();
-    cout << " done. (" << sorted_mrx.size() << " mrx, "
-         << sorted_det.size() << " det entries)\n";
-
-    // ── write JSON ─────────────────────────────────────────────
+    // ── build output file name stem ─────────────────────────────
     string det_str;
     for (size_t i = 0; i < det_starts.size(); ++i) {
         if (i) det_str += '_';
@@ -560,11 +704,52 @@ int main(int argc, char *argv[]) {
         auto dot = map_name.rfind('.');
         if (dot != string::npos) map_name = map_name.substr(0, dot);
     }
-    string out_path = map_name + "_x" + to_string(mrx_start) + "_d" + det_str
-                    + "_r" + to_string(MAX_ROUNDS) + "_cpp.json";
 
-    write_json(out_path, map_path, mrx_start, det_starts,
-               forced_escape, solve_s, memo.size());
+    // Create policies/ subdirectory if needed.
+    filesystem::create_directories("policies");
+
+    string stem = "policies/" + map_name + "_x" + to_string(mrx_start)
+                + "_d" + det_str + "_r" + to_string(MAX_ROUNDS) + "_cpp";
+
+    bool emit_json   = (output_format == "json"  || output_format == "both");
+    bool emit_binary = (output_format == "binary" || output_format == "both");
+
+    // ── write JSON (if requested) ──────────────────────────────
+    double json_ser_s = 0;
+    if (emit_json) {
+        auto t_ser0 = chrono::high_resolution_clock::now();
+
+        cout << "Building JSON maps from policy tables..." << flush;
+        build_json_maps();
+        cout << " done. (" << sorted_mrx.size() << " mrx, "
+             << sorted_det.size() << " det entries)\n";
+
+        string json_path = stem + ".json";
+        write_json(json_path, map_path, mrx_start, det_starts,
+                   guaranteed, forced_escape, solve_s, memo.size());
+
+        auto t_ser1 = chrono::high_resolution_clock::now();
+        json_ser_s = chrono::duration<double>(t_ser1 - t_ser0).count();
+    }
+
+    // ── write compact binary (if requested) ────────────────────
+    double bin_ser_s = 0;
+    if (emit_binary) {
+        auto t_bin0 = chrono::high_resolution_clock::now();
+
+        string bin_path = stem + ".bin";
+        write_binary(bin_path, map_path, mrx_start, det_starts,
+                     guaranteed, forced_escape, solve_s, memo.size());
+
+        auto t_bin1 = chrono::high_resolution_clock::now();
+        bin_ser_s = chrono::duration<double>(t_bin1 - t_bin0).count();
+    }
+
+    cout << "\n=== Serialisation Timing ===\n";
+    if (emit_json)
+        cout << "JSON (build maps + write): " << json_ser_s << " s\n";
+    if (emit_binary)
+        cout << "Binary (build + write):    " << bin_ser_s  << " s\n";
 
     return 0;
 }

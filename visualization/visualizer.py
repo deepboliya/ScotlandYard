@@ -52,12 +52,14 @@ class GameVisualizer:
         mrx_policy_label: str = "Unknown",
         detective_policy_label: str = "Unknown",
         hint_policy: dict | None = None,
+        guaranteed_survival: int | None = None,
     ):
         self.engine = engine
         self.mode_label = mode_label
         self.mrx_policy_label = mrx_policy_label
         self.detective_policy_label = detective_policy_label
         self.hint_policy = hint_policy
+        self.guaranteed_survival = guaranteed_survival
 
         # networkx graph (purely for drawing)
         self.G = nx.Graph()
@@ -252,6 +254,14 @@ class GameVisualizer:
             f"Mr. X policy: {self.mrx_policy_label}\n"
             f"Detective policy: {self.detective_policy_label}"
         )
+        if self.guaranteed_survival is not None:
+            max_r = s.max_rounds
+            gs = self.guaranteed_survival
+            if gs >= max_r:
+                surv_line = f"Mr. X guaranteed escape ({gs}/{max_r} rounds)"
+            else:
+                surv_line = f"Mr. X survives {gs}/{max_r} rounds (detectives win)"
+            policy_text += f"\n{surv_line}"
         self._fig_texts.append(self.fig.text(
             0.99,
             0.99,
