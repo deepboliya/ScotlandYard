@@ -6,26 +6,28 @@ for computing optimal strategies for both Mr. X and detectives.
 ## Project Structure
 
 ```
-main.py              CLI entry point (all game modes)
+main.py                 CLI entry point (all game modes)
+fast_policy_v2.cpp      Sparse C++ minimax solver (unordered_map memo)
+fast_policy_v2.1.cpp    Dense C++ minimax solver (fixed-array memo, up to 5 detectives)
 game/
-  board.py           Graph representation (adjacency, positions)
-  state.py           Game state (positions, rounds, turn tracking)
-  engine.py          Turn engine (step / round / full game)
+  board.py              Graph representation (adjacency, positions)
+  state.py              Game state (positions, rounds, turn tracking)
+  engine.py             Turn engine (step / round / full game)
 strategies/
-  base.py            Abstract Strategy interface
-  random_strategy.py Random move selection
-  human.py           Click-to-move via visualiser callback
-  policy_strategy.py Plays from a precomputed policy (in-memory or JSON)
-solver/
+  base.py               Abstract Strategy interface
+  random_strategy.py    Random move selection
+  human.py              Click-to-move via visualiser callback
+  policy_strategy.py    Plays from a precomputed policy (in-memory or JSON)
+old_solvers/
   exhaustive_solver.py  Python minimax solver with memoisation
-  solve.cpp             C++ minimax solver (same algorithm, ~7x faster)
+  solve.cpp             Legacy C++ minimax solver
 visualization/
-  visualizer.py      Interactive matplotlib + networkx GUI
+  visualizer.py         Interactive matplotlib + networkx GUI
 maps/
-  first50.txt        50 nodes, 81 edges
-  first100.txt       99 nodes, 198 edges
-  full_map.txt       199 nodes, 436 edges
-  node_locations.csv Node coordinates for visualisation layout
+  first50.txt           50 nodes, 81 edges
+  first100.txt          99 nodes, 198 edges
+  full_map.txt          199 nodes, 436 edges
+  node_locations.csv    Node coordinates for visualisation layout
 ```
 
 ## Requirements
@@ -93,10 +95,26 @@ python main.py --mode solve --mrx 13 --detectives 7 43 --max-rounds 24 --dump-po
 # C++ solver (faster)
 g++ -O2 -std=c++17 -o solve solver/solve.cpp
 ./solve --map maps/first50.txt --mrx 13 --detectives 7 43 --max-rounds 24
+
+# C++ sparse policy solver (recommended default)
+g++ -O3 -std=c++17 -o fast_policy_v2 fast_policy_v2.cpp
+./fast_policy_v2 --map maps/full_map.txt --mrx 100 --detectives 1 199 --max-rounds 12 --output-format binary
+
+# C++ dense policy solver (fixed arrays, optional threading)
+g++ -O3 -std=c++17 -pthread -o fast_policy_v2_1 fast_policy_v2.1.cpp
+./fast_policy_v2_1 --map maps/first50.txt --mrx 13 --detectives 7 20 43 --max-rounds 5 --threads 4
 ```
 
 Both produce a JSON policy file (e.g. `x13_d7_43_r24.json` or
 `x13_d7_43_r24_cpp.json`) that can be loaded with `--policy-file`.
+
+Dense solver notes:
+
+- `fast_policy_v2.1.cpp` supports detective counts from 1 to 5.
+- It uses a dense fixed-size state table, so memory grows quickly with
+  map size, rounds, and number of detectives.
+- If the dense table would be too large, it exits with an error; use
+  `fast_policy_v2.cpp` for larger configurations.
 
 ### Hint Overlay
 

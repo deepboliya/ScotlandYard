@@ -19,6 +19,10 @@ from typing import List, Optional
 from game.engine import GameEngine
 
 
+class _UndoRequested(Exception):
+    """Raised inside wait_for_click when the user presses undo."""
+
+
 class GameVisualizer:
     """Draws the board, player tokens, and handles user interaction.
 
@@ -73,6 +77,7 @@ class GameVisualizer:
         # interaction state
         self._valid_moves: List[int] = []
         self._selected_node: Optional[int] = None
+        self._undo_requested = False
         self._auto_delay = 0.5
 
         # matplotlib figure
@@ -386,7 +391,28 @@ class GameVisualizer:
         if node is not None and node in self._valid_moves:
             self._selected_node = node
 
+    @property
+    def _waiting_for_click(self) -> bool:
+        """True when wait_for_click is blocking for user input."""
+        return bool(self._valid_moves)
+
     def _on_key(self, event) -> None:
+        # When waiting for a human click, only allow undo and quit.
+        if self._waiting_for_click:
+            if event.key == "b":
+                if self.engine.undo():
+                    s = self.engine.state
+                    if not s.game_over and s.is_mrx_turn:
+                        self._valid_moves = self.engine.get_mrx_valid_moves()
+                    else:
+                        self._valid_moves = []
+                    self._selected_node = None
+                    self._undo_requested = True
+                    self.draw()
+            elif event.key == "q":
+                plt.close(self.fig)
+            return
+
         if event.key == "n":
             if not self.engine.state.game_over:
                 self.engine.step()
@@ -397,13 +423,13 @@ class GameVisualizer:
                 self.draw()
         elif event.key == "b":
             if self.engine.undo():
-                # Refresh valid-move highlights for the restored state
                 s = self.engine.state
                 if not s.game_over and s.is_mrx_turn:
                     self._valid_moves = self.engine.get_mrx_valid_moves()
                 else:
                     self._valid_moves = []
                 self._selected_node = None
+                self._undo_requested = True
                 self.draw()
         elif event.key == "a":
             self._auto_play()
@@ -429,9 +455,16 @@ class GameVisualizer:
 
         try:
             while not self.engine.state.game_over:
-                # Mr. X's turn → wait for human click inside engine.step()
-                # via the HumanStrategy → wait_for_click callback.
-                self.engine.step()
+                try:
+                    # Mr. X's turn → wait for human click inside
+                    # engine.step() via HumanStrategy → wait_for_click.
+                    self.engine.step()
+                except _UndoRequested:
+                    # Undo pressed during wait_for_click — the engine
+                    # state has already been rolled back by _on_key.
+                    # Redraw and restart the loop.
+                    self.draw()
+                    continue
                 self.draw()
 
                 # brief pause so the user can see each intermediate state
@@ -464,9 +497,14 @@ class GameVisualizer:
         """
         self._valid_moves = list(valid_moves)
         self._selected_node = None
+        self._undo_requested = False
         self.draw()
 
         while self._selected_node is None:
+            if self._undo_requested:
+                self._undo_requested = False
+                self._valid_moves = []
+                raise _UndoRequested()
             if not plt.fignum_exists(self.fig.number):
                 raise SystemExit("Window closed")
             plt.pause(0.05)
