@@ -840,7 +840,7 @@ int main(int argc, char *argv[]) {
     bool emit_json   = (output_format == "json" || output_format == "both");
     bool emit_binary = (output_format == "binary" || output_format == "both");
 
-    if (emit_json || emit_binary) {
+    if (emit_json) {
         cout << "Building policy maps..." << flush;
         build_json_maps();
         cout << " done. (" << sorted_mrx.size() << " mrx, "
