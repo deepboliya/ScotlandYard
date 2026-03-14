@@ -274,7 +274,8 @@ static int solve(int depth_left, int x_pos, int* dets, int nd,
         }
         if (st == 1) {
             // Another thread is computing this key.
-            // Fall back to local computation without claiming/writing the slot.
+            // Fall back to local computation without claiming/writing the slot. 
+            // With round-invariant keys (depth not in key), waiting here can deadlock across threads (A waits on B while B waits on A).
             break;
         }
         uint32_t expected = 0;
