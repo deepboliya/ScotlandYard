@@ -768,7 +768,7 @@ int main(int argc, char *argv[]) {
     precompute_distances();
     auto t_bfs1 = chrono::high_resolution_clock::now();
     double bfs_s = chrono::duration<double>(t_bfs1 - t_bfs0).count();
-    cout << " done.\n";
+    cout << " done. (" << bfs_s << " s)\n";
 
     build_nCk();
     num_det_states = (size_t)nCk[num_nodes + ND - 1][ND];
@@ -848,6 +848,7 @@ int main(int argc, char *argv[]) {
     }
 
     uint64_t evaluated = states_computed.load(memory_order_relaxed);
+    auto t_store0 = chrono::high_resolution_clock::now();
     if (emit_json) {
         string json_path = stem + ".json";
         write_json(json_path, map_path, mrx_start, det_starts,
@@ -858,6 +859,9 @@ int main(int argc, char *argv[]) {
         write_binary(bin_path, map_path, mrx_start, det_starts,
                      guaranteed, forced_escape, solve_s, evaluated);
     }
+    auto t_store1 = chrono::high_resolution_clock::now();
+    double store_s = chrono::duration<double>(t_store1 - t_store0).count();
+    cout << "Policy store time: " << store_s << " s\n";
 
     return 0;
 }
