@@ -341,6 +341,9 @@ int main(int argc, char *argv[]) {
             map_path = argv[++i];
         } else if (!strcmp(argv[i], "--threads") && i + 1 < argc) {
             NUM_THREADS = atoi(argv[++i]);
+        } else {
+            cerr << "Error: Unknown argument '" << argv[i] << "'\n";
+            return 1;
         }
     }
 
