@@ -328,9 +328,9 @@ def main() -> None:
                 (
                     loaded_policy,
                     loaded_det_policy,
-                    mrx_start,
-                    detective_starts,
-                    max_rounds,
+                    pol_mrx_start,
+                    pol_det_starts,
+                    pol_max_rounds,
                     policy_board_path,
                     _nd,
                     guaranteed_survival,
@@ -342,13 +342,20 @@ def main() -> None:
                 (
                     loaded_policy,
                     loaded_det_policy,
-                    mrx_start,
-                    detective_starts,
-                    max_rounds,
+                    pol_mrx_start,
+                    pol_det_starts,
+                    pol_max_rounds,
                     policy_board_path,
                     guaranteed_survival,
                     _survival_dict,
                 ) = _load_json_policy_bundle(args.policy_file, cli_board_id)
+
+            if pol_mrx_start is not None:
+                mrx_start = pol_mrx_start
+            if pol_det_starts is not None:
+                detective_starts = pol_det_starts
+            if pol_max_rounds is not None:
+                max_rounds = pol_max_rounds
 
             if policy_board_path is not None:
                 map_path = policy_board_path
@@ -360,17 +367,17 @@ def main() -> None:
             board_id = map_path
 
             mismatches: list[str] = []
-            if _cli_flag_present("--mrx") and cli_mrx != mrx_start:
+            if _cli_flag_present("--mrx") and pol_mrx_start is not None and cli_mrx != pol_mrx_start:
                 mismatches.append(
-                    f"--mrx={cli_mrx} (policy has {mrx_start})"
+                    f"--mrx={cli_mrx} (policy has {pol_mrx_start})"
                 )
-            if _cli_flag_present("--detectives") and cli_detectives != detective_starts:
+            if _cli_flag_present("--detectives") and pol_det_starts is not None and cli_detectives != pol_det_starts:
                 mismatches.append(
-                    f"--detectives={cli_detectives} (policy has {detective_starts})"
+                    f"--detectives={cli_detectives} (policy has {pol_det_starts})"
                 )
-            if _cli_flag_present("--max-rounds") and cli_max_rounds != max_rounds:
+            if _cli_flag_present("--max-rounds") and pol_max_rounds is not None and cli_max_rounds != pol_max_rounds:
                 mismatches.append(
-                    f"--max-rounds={cli_max_rounds} (policy has {max_rounds})"
+                    f"--max-rounds={cli_max_rounds} (policy has {pol_max_rounds})"
                 )
             if mismatches:
                 raise ValueError(

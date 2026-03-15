@@ -64,6 +64,8 @@ static size_t memo_table_size = 0;
 // Because we always evaluate the whole depth iteratively or to completion,
 // we don't need 'depth_used' to handle dynamic query depths anymore.
 static unique_ptr<atomic<uint32_t>[]> memo_table;
+static unique_ptr<uint8_t[]> best_mrx_move_table;
+static unique_ptr<uint8_t[]> best_det_move_table;
 
 static atomic<uint64_t> states_computed(0);
 
@@ -189,6 +191,7 @@ struct DetRecurseCtx {
     int nd;
     int orig[5];
     int combo[5];
+    int best_combo[5];
     int worst_depth;
 };
 
@@ -202,6 +205,7 @@ static void det_recurse(DetRecurseCtx &ctx, int det_idx) {
         int d = solve(ctx.depth_left, ctx.x_pos, sorted, ctx.nd, true);
         if (d < ctx.worst_depth) {
             ctx.worst_depth = d;
+            for (int i = 0; i < ctx.nd; ++i) ctx.best_combo[i] = ctx.combo[i];
         }
         return;
     }
@@ -265,11 +269,22 @@ static int solve(int depth_left, int x_pos, int* dets, int nd, bool is_x_turn) {
     states_computed.fetch_add(1, memory_order_relaxed);
 
     int result = 0;
+    int best_move_x = x_pos;
+    int best_combo_d[5];
+    for (int i = 0; i < nd; ++i) best_combo_d[i] = dets[i]; // default
 
     if (is_x_turn) {
         int min_dist = min_dist_to_dets(x_pos, dets, nd);
         if (min_dist > depth_left) {
             result = depth_left;
+            if (!adj[x_pos].empty()) {
+                best_move_x = adj[x_pos][0];
+                int best_d = -1;
+                for (int mv : adj[x_pos]) {
+                    int d = min_dist_to_dets(mv, dets, nd);
+                    if (d > best_d) { best_d = d; best_move_x = mv; }
+                }
+            }
         } else {
             const auto &moves = adj[x_pos];
             if (moves.empty()) {
@@ -283,10 +298,14 @@ static int solve(int depth_left, int x_pos, int* dets, int nd, bool is_x_turn) {
                 });
 
                 int best = -1;
+                best_move_x = ordered[0];
                 for (int mv : ordered) {
                     int child = solve(depth_left - 1, mv, dets, nd, false);
                     int survival = 1 + child;
-                    if (survival > best) best = survival;
+                    if (survival > best) {
+                        best = survival;
+                        best_move_x = mv;
+                    }
                     if (best >= depth_left) break; // Pruned
                 }
                 
@@ -302,13 +321,26 @@ static int solve(int depth_left, int x_pos, int* dets, int nd, bool is_x_turn) {
         ctx.x_pos = x_pos;
         ctx.nd = nd;
         ctx.worst_depth = depth_left + 1;
-        for (int i = 0; i < nd; ++i) ctx.orig[i] = dets[i];
+        for (int i = 0; i < nd; ++i) {
+            ctx.orig[i] = dets[i];
+            ctx.best_combo[i] = dets[i];
+        }
 
         det_recurse(ctx, 0);
         result = (ctx.worst_depth > depth_left) ? depth_left : ctx.worst_depth;
+        for (int i = 0; i < nd; ++i) best_combo_d[i] = ctx.best_combo[i];
     }
 
     if (owns_slot) {
+        if (best_mrx_move_table) {
+            if (is_x_turn) {
+                best_mrx_move_table[idx] = (uint8_t)best_move_x;
+            } else {
+                for (int i = 0; i < nd; ++i) {
+                    best_det_move_table[idx * MAX_DETS + i] = (uint8_t)best_combo_d[i];
+                }
+            }
+        }
         uint32_t final_pack = 2 | ((uint32_t)result << 8);
         memo_table[idx].store(final_pack, memory_order_release);
     }
@@ -329,8 +361,139 @@ static void enumerate_det_tuples_rec(int idx, int lo, int *buf,
     }
 }
 
+
+static string json_escape(const string &s) {
+    string out;
+    for (char c : s) {
+        if (c == '"')       out += "\"";
+        else if (c == '\\') out += "\\\\";
+        else                out += c;
+    }
+    return out;
+}
+
+static void write_u32_le(ofstream &f, uint32_t v) {
+    char buf[4];
+    buf[0] = (char)(v & 0xFF);
+    buf[1] = (char)((v >> 8) & 0xFF);
+    buf[2] = (char)((v >> 16) & 0xFF);
+    buf[3] = (char)((v >> 24) & 0xFF);
+    f.write(buf, 4);
+}
+
+static void write_binary_policy(const string &path,
+                                const string &map_path,
+                                double solve_time_s,
+                                uint64_t states_eval)
+{
+    cout << "\nBuilding binary policy for max depths..." << flush;
+    int mrx_rec_len = ND + 3;
+    int det_rec_len = 2 * ND + 2;
+
+    struct MrxRec {
+        uint8_t data[8];
+        bool operator<(const MrxRec &o) const { return memcmp(data, o.data, sizeof(data)) < 0; }
+    };
+    struct DetRec {
+        uint8_t data[12];
+        bool operator<(const DetRec &o) const { return memcmp(data, o.data, sizeof(data)) < 0; }
+    };
+
+    vector<MrxRec> mrx_recs;
+    vector<DetRec> det_recs;
+
+    int dets[5];
+    enumerate_det_tuples_rec(0, 1, dets, [&](const int* tuple) {
+        for (int x = 1; x <= num_nodes; ++x) {
+            // we omit x if x is occupied by det
+            bool occupied = false;
+            for(int i=0; i<ND; ++i) if(tuple[i] == x) occupied = true;
+            if(occupied) continue;
+
+            // X's highest computed depth
+            for (int d = MAX_ROUNDS; d >= 1; --d) {
+                size_t idx = state_index(d, x, tuple, ND, true);
+                uint32_t pk = memo_table[idx].load(memory_order_relaxed);
+                if ((pk & 0xFF) == 2) {
+                    MrxRec r{};
+                    r.data[0] = (uint8_t)x;
+                    for (int i = 0; i < ND; ++i) r.data[1 + i] = (uint8_t)tuple[i];
+                    r.data[1 + ND] = best_mrx_move_table[idx];
+                    r.data[2 + ND] = (pk >> 8) & 0xFF;
+                    mrx_recs.push_back(r);
+                    break;
+                }
+            }
+
+            // Dets' highest computed depth
+            for (int d = MAX_ROUNDS; d >= 1; --d) {
+                size_t idx = state_index(d, x, tuple, ND, false);
+                uint32_t pk = memo_table[idx].load(memory_order_relaxed);
+                if ((pk & 0xFF) == 2) {
+                    DetRec r{};
+                    r.data[0] = (uint8_t)x;
+                    for (int i = 0; i < ND; ++i) r.data[1 + i] = (uint8_t)tuple[i];
+                    for (int i = 0; i < ND; ++i) r.data[1 + ND + i] = best_det_move_table[idx * MAX_DETS + i];
+                    r.data[1 + 2 * ND] = (pk >> 8) & 0xFF;
+                    det_recs.push_back(r);
+                    break;
+                }
+            }
+        }
+    });
+
+    sort(mrx_recs.begin(), mrx_recs.end());
+    sort(det_recs.begin(), det_recs.end());
+    cout << " done.\n";
+
+    ostringstream hdr;
+    hdr << "{\n";
+    hdr << "  \"format\": \"scotlandyard-policy-bin-v1\",\n";
+    hdr << "  \"board\": \"" << json_escape(map_path) << "\",\n";
+    hdr << "  \"config\": {\n";
+    hdr << "    \"mrx_start\": null,\n";
+    hdr << "    \"detective_starts\": null,\n";
+    hdr << "    \"max_rounds\": " << MAX_ROUNDS << ",\n";
+    hdr << "    \"guaranteed_survival\": null,\n";
+    hdr << "    \"num_detectives\": " << ND << "\n";
+    hdr << "  },\n";
+    hdr << "  \"solver\": {\n";
+    hdr << "    \"policy_size\": " << mrx_recs.size() << ",\n";
+    hdr << "    \"detective_policy_size\": " << det_recs.size() << ",\n";
+    hdr << "    \"memo_size_positions\": " << memo_table_size << ",\n";
+    hdr << "    \"states_evaluated\": " << states_eval << ",\n";
+    hdr << "    \"solve_time_seconds\": " << solve_time_s << ",\n";
+    hdr << "    \"forced_escape\": false\n";
+    hdr << "  },\n";
+    hdr << "  \"binary_layout\": {\n";
+    hdr << "    \"mrx_record_bytes\": " << mrx_rec_len << ",\n";
+    hdr << "    \"det_record_bytes\": " << det_rec_len << "\n";
+    hdr << "  }\n";
+    hdr << "}";
+    string header_str = hdr.str();
+
+    ofstream f(path, ios::binary);
+    if (!f) { cerr << "Error: cannot write " << path << "\n"; return; }
+
+    f.write("SYP1", 4);
+    write_u32_le(f, (uint32_t)header_str.size());
+    f.write(header_str.data(), header_str.size());
+
+    write_u32_le(f, (uint32_t)mrx_recs.size());
+    for (auto &r : mrx_recs)
+        f.write((const char*)r.data, mrx_rec_len);
+
+    write_u32_le(f, (uint32_t)det_recs.size());
+    for (auto &r : det_recs)
+        f.write((const char*)r.data, det_rec_len);
+
+    f.close();
+    cout << "Binary policy written to: " << path << "\n";
+}
+
 int main(int argc, char *argv[]) {
     string map_path;
+    string policy_out_path;
 
     for (int i = 1; i < argc; ++i) {
         if (!strcmp(argv[i], "--num-detectives") && i + 1 < argc) {
@@ -341,6 +504,8 @@ int main(int argc, char *argv[]) {
             map_path = argv[++i];
         } else if (!strcmp(argv[i], "--threads") && i + 1 < argc) {
             NUM_THREADS = atoi(argv[++i]);
+        } else if (!strcmp(argv[i], "--policy-file") && i + 1 < argc) {
+            policy_out_path = argv[++i];
         } else {
             cerr << "Error: Unknown argument '" << argv[i] << "'\n";
             return 1;
@@ -350,7 +515,7 @@ int main(int argc, char *argv[]) {
     if (map_path.empty()) {
         cerr << "Usage: " << argv[0]
              << " --map <path>"
-             << " [--num-detectives <N>] [--max-rounds <N>] [--threads <T>]\n";
+             << " [--num-detectives <N>] [--max-rounds <N>] [--threads <T>] [--policy-file <file.bin>]\n";
         return 1;
     }
 
@@ -391,6 +556,10 @@ int main(int argc, char *argv[]) {
     }
 
     memo_table = make_unique<atomic<uint32_t>[]>(total_states);
+    if (!policy_out_path.empty()) {
+        best_mrx_move_table = make_unique<uint8_t[]>(total_states);
+        best_det_move_table = make_unique<uint8_t[]>(total_states * MAX_DETS);
+    }
     for (size_t i = 0; i < total_states; ++i)
         memo_table[i].store(0, memory_order_relaxed);
 
@@ -518,6 +687,10 @@ int main(int argc, char *argv[]) {
     cout << "\nSummary: Mr. X escapes (survives full " << MAX_ROUNDS << " rounds) in " 
          << escaped << " out of " << starting_states.size() << " starting positions ("
          << fixed << setprecision(2) << (escaped * 100.0 / starting_states.size()) << "%).\n";
+
+    if (!policy_out_path.empty()) {
+        write_binary_policy(policy_out_path, map_path, solve_s, states_computed.load(memory_order_relaxed));
+    }
 
     return 0;
 }
