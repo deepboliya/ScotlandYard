@@ -413,8 +413,12 @@ int main(int argc, char *argv[]) {
             double elapsed = chrono::duration<double>(now - start_time).count();
             double rate = elapsed > 0 ? cur / elapsed : 0;
             
-            cout << "\r[Progress] Computed: " << cur << " states"
-                 << " (" << fixed << setprecision(1) << rate << " states/sec)" << flush;
+            double percent = (double)cur / total_states * 100.0;
+            if (percent > 100.0) percent = 100.0;
+            
+            cout << "\r[Progress] Computed: " << cur << " / " << total_states << " states "
+                 << "(" << fixed << setprecision(2) << percent << "%) "
+                 << "@ " << fixed << setprecision(1) << rate << " states/sec" << flush;
         }
     });
 
