@@ -60,8 +60,13 @@ class PolicyStrategy(Strategy):
         if move in valid_moves:
             return move
         if self.strict:
+            if move is None:
+                raise KeyError(
+                    f"PolicyStrategy: no policy entry for {key!r} "
+                    f"(valid_moves={valid_moves})"
+                )
             raise KeyError(
-                f"PolicyStrategy: no policy entry for {key!r} "
+                f"PolicyStrategy: illegal policy move {move} for {key!r} "
                 f"(valid_moves={valid_moves})"
             )
         return min(valid_moves)
@@ -132,9 +137,14 @@ class SerializedPolicyStrategy(Strategy):
         if move in valid_moves:
             return move
         if self.strict:
+            if move is None:
+                raise KeyError(
+                    f"SerializedPolicyStrategy: no policy entry for key "
+                    f"'{key}' (valid_moves={valid_moves})"
+                )
             raise KeyError(
-                f"SerializedPolicyStrategy: no policy entry for key "
-                f"'{key}' (valid_moves={valid_moves})"
+                f"SerializedPolicyStrategy: illegal policy move {move} "
+                f"for key '{key}' (valid_moves={valid_moves})"
             )
         return min(valid_moves)
 
@@ -201,8 +211,13 @@ class BinaryPolicyStrategy(Strategy):
         if move in valid_moves:
             return move
         if self.strict:
+            if move is None:
+                raise KeyError(
+                    f"BinaryPolicyStrategy: no policy entry for key "
+                    f"{key!r} (valid_moves={valid_moves})"
+                )
             raise KeyError(
-                f"BinaryPolicyStrategy: no policy entry for key "
+                f"BinaryPolicyStrategy: illegal policy move {move} for key "
                 f"{key!r} (valid_moves={valid_moves})"
             )
         return min(valid_moves)
