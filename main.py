@@ -375,6 +375,10 @@ def main() -> None:
                 mismatches.append(
                     f"--detectives={cli_detectives} (policy has {pol_det_starts})"
                 )
+            elif pol_det_starts is None and is_binary_policy and len(cli_detectives) != _nd:
+                mismatches.append(
+                    f"policy requires exactly {_nd} detectives, but got {len(cli_detectives)} (use --detectives)"
+                )
             if _cli_flag_present("--max-rounds") and pol_max_rounds is not None and cli_max_rounds != pol_max_rounds:
                 mismatches.append(
                     f"--max-rounds={cli_max_rounds} (policy has {pol_max_rounds})"
