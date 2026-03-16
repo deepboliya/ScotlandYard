@@ -283,24 +283,32 @@ def main() -> None:
     parser.add_argument("--no-viz", action="store_true",
                         help="Run without visualisation (text only)")
     parser.add_argument(
-        "--policy-file",
+        "--mrx-policy",
         type=str,
         default=None,
         help=(
-            "Load Mr. X policy+configuration from dumped JSON (.json) "
-            "or compact binary (.bin) file "
-            "(overrides --mrx/--detectives/--max-rounds/--map)"
+            "Load Mr. X policy from a .bin file (uses only Mr. X moves; "
+            "overrides --mrx/--detectives/--max-rounds/--map)"
+        ),
+    )
+    parser.add_argument(
+        "--det-policy",
+        type=str,
+        default=None,
+        help=(
+            "Load detective policy from a .bin file (uses only detective moves; "
+            "overrides --mrx/--detectives/--max-rounds/--map)"
         ),
     )
     parser.add_argument(
         "--help-human",
         action="store_true",
-        help="Highlight the optimal move from --policy-file in light yellow",
+        help="Highlight the optimal move from policy files in light yellow",
     )
     args = parser.parse_args()
 
-    if args.help_human and not args.policy_file:
-        print("Error: --help-human requires --policy-file.")
+    if args.help_human and not (args.mrx_policy or args.det_policy):
+        print("Error: --help-human requires --mrx-policy and/or --det-policy.")
         sys.exit(1)
 
     loaded_policy = None
@@ -312,9 +320,10 @@ def main() -> None:
     detective_starts = list(args.detectives)
     max_rounds = args.max_rounds
 
-    # Determine map_path: use policy file's board if --policy-file given,
+    # Determine map_path: use policy file's board if policy given,
     # otherwise fall back to --map CLI argument.
-    if args.policy_file:
+    has_policy = args.mrx_policy or args.det_policy
+    if has_policy:
         try:
             # If --map was explicitly passed, validate against the policy
             explicit_map = _cli_flag_present("--map")
@@ -324,10 +333,21 @@ def main() -> None:
             cli_detectives = list(args.detectives)
             cli_max_rounds = args.max_rounds
 
-            if args.policy_file.endswith(".bin"):
+            # ── Load Mr. X policy file ─────────────────────────────────
+            _mrx_survival: dict = {}
+            _det_survival_from_mrx: dict = {}
+            policy_board_path = None
+            pol_mrx_start = None
+            pol_det_starts = None
+            pol_max_rounds = None
+            _nd = None
+
+            if args.mrx_policy:
+                if not args.mrx_policy.endswith(".bin"):
+                    raise ValueError("--mrx-policy only supports .bin files.")
                 (
                     loaded_policy,
-                    loaded_det_policy,
+                    _unused_det,
                     pol_mrx_start,
                     pol_det_starts,
                     pol_max_rounds,
@@ -335,20 +355,40 @@ def main() -> None:
                     _nd,
                     guaranteed_survival,
                     _mrx_survival,
-                    _det_survival,
-                ) = _load_binary_policy_bundle(args.policy_file, cli_board_id)
+                    _det_survival_from_mrx,
+                ) = _load_binary_policy_bundle(args.mrx_policy, cli_board_id)
                 is_binary_policy = True
-            else:
+                print(f"Loaded Mr. X policy file: {args.mrx_policy}")
+
+            # ── Load detective policy file ─────────────────────────────
+            _det_survival: dict = {}
+
+            if args.det_policy:
+                if not args.det_policy.endswith(".bin"):
+                    raise ValueError("--det-policy only supports .bin files.")
                 (
-                    loaded_policy,
+                    _unused_mrx,
                     loaded_det_policy,
-                    pol_mrx_start,
-                    pol_det_starts,
-                    pol_max_rounds,
-                    policy_board_path,
-                    guaranteed_survival,
-                    _survival_dict,
-                ) = _load_json_policy_bundle(args.policy_file, cli_board_id)
+                    det_pol_mrx_start,
+                    det_pol_det_starts,
+                    det_pol_max_rounds,
+                    det_policy_board_path,
+                    det_nd,
+                    det_guaranteed_survival,
+                    _mrx_survival_from_det,
+                    _det_survival,
+                ) = _load_binary_policy_bundle(args.det_policy, cli_board_id)
+                is_binary_policy = True
+                print(f"Loaded detective policy file: {args.det_policy}")
+
+                # If no mrx-policy was given, use config from det-policy
+                if not args.mrx_policy:
+                    pol_mrx_start = det_pol_mrx_start
+                    pol_det_starts = det_pol_det_starts
+                    pol_max_rounds = det_pol_max_rounds
+                    policy_board_path = det_policy_board_path
+                    _nd = det_nd
+                    guaranteed_survival = det_guaranteed_survival
 
             if pol_mrx_start is not None:
                 mrx_start = pol_mrx_start
@@ -359,8 +399,6 @@ def main() -> None:
 
             if policy_board_path is not None:
                 map_path = policy_board_path
-            elif explicit_map:
-                map_path = f"maps/{args.map}.txt"
             else:
                 map_path = f"maps/{args.map}.txt"
 
@@ -375,7 +413,7 @@ def main() -> None:
                 mismatches.append(
                     f"--detectives={cli_detectives} (policy has {pol_det_starts})"
                 )
-            elif pol_det_starts is None and is_binary_policy and len(cli_detectives) != _nd:
+            elif pol_det_starts is None and is_binary_policy and _nd is not None and len(cli_detectives) != _nd:
                 mismatches.append(
                     f"policy requires exactly {_nd} detectives, but got {len(cli_detectives)} (use --detectives)"
                 )
@@ -390,33 +428,26 @@ def main() -> None:
                 )
 
             # Build per-state survival lookup
-            if is_binary_policy:
-                _ms, _ds = _mrx_survival, _det_survival
-                if _ms or _ds:
-                    def _surv_fn(st, ms=_ms, ds=_ds):
-                        k = (st.mrx_position, *st.detective_positions)
-                        return ms.get(k) if st.current_player == "mrx" else ds.get(k)
-                    survival_fn = _surv_fn
-            else:
-                _sd = _survival_dict
-                if _sd:
-                    def _surv_fn(st, sd=_sd):
-                        d = ",".join(map(str, st.detective_positions))
-                        return sd.get(f"p={st.current_player}|x={st.mrx_position}|d={d}")
-                    survival_fn = _surv_fn
+            # mrx_survival comes from --mrx-policy, det_survival from --det-policy
+            _ms = _mrx_survival
+            _ds = _det_survival
+            if _ms or _ds:
+                def _surv_fn(st, ms=_ms, ds=_ds):
+                    k = (st.mrx_position, *st.detective_positions)
+                    return ms.get(k) if st.current_player == "mrx" else ds.get(k)
+                survival_fn = _surv_fn
 
-            print(f"Loaded policy file: {args.policy_file}")
             surv_str = (
                 f", guaranteed_survival={guaranteed_survival}/{max_rounds}"
                 if guaranteed_survival is not None else ""
             )
             print(
-                "Using configuration from policy file: "
+                "Using configuration from policy: "
                 f"map={map_path}, mrx={mrx_start}, detectives={detective_starts}, "
                 f"max_rounds={max_rounds}{surv_str}"
             )
         except (OSError, ValueError, json.JSONDecodeError) as exc:
-            print(f"Error loading --policy-file: {exc}")
+            print(f"Error loading policy file: {exc}")
             sys.exit(1)
     else:
         map_path = f"maps/{args.map}.txt"
