@@ -61,8 +61,10 @@ static size_t memo_table_size = 0;
 // Packed state for thread-safe concurrent reads/writes:
 // Bits 0-7:   State (0 = uncomputed, 1 = computing, 2 = done)
 // Bits 8-15:  Value (survival result)
-// Because we always evaluate the whole depth iteratively or to completion,
-// we don't need 'depth_used' to handle dynamic query depths anymore.
+// Note: depth is NOT stored in these packed bits.
+// Depth is encoded in the memo key/index layout via state_index():
+//   [depth][turn][x_pos][det_rank].
+// So unlike the older design, no separate per-slot 'depth_used' field is needed.
 static unique_ptr<atomic<uint32_t>[]> memo_table;
 
 static atomic<uint64_t> states_computed(0);
@@ -171,6 +173,13 @@ static inline int min_dist_to_dets(int x_pos, const int* dets, int nd) {
     return md;
 }
 
+static inline bool is_det_occupied(int node, const int* dets, int nd) {
+    for (int i = 0; i < nd; ++i) {
+        if (dets[i] == node) return true;
+    }
+    return false;
+}
+
 static inline size_t state_index(int depth_left, int x_pos, const int* dets, int nd, bool is_x_turn) {
     size_t det_rank = rank_dets(dets, nd);
     // Include depth in the key to ensure correctness while sweeping and avoid cyclic dependencies
@@ -231,64 +240,95 @@ static void det_recurse(DetRecurseCtx &ctx, int det_idx) {
 }
 
 static int solve(int depth_left, int x_pos, int* dets, int nd, bool is_x_turn) {
+    // Canonicalize detective ordering so state keys are permutation-invariant.
     sort(dets, dets + nd);
 
-    // terminal: caught
+    // Terminal 1: Mr. X is currently on a detective node (already caught).
     for (int i = 0; i < nd; ++i)
         if (x_pos == dets[i])
             return 0;
 
-    // terminal: horizon reached at X turn
+    // Terminal 2: no rounds left to play on Mr. X turn.
     if (depth_left <= 0 && is_x_turn) return 0;
 
+    // Compute dense memo-table index for this exact (depth, turn, positions) state.
     size_t idx = state_index(depth_left, x_pos, dets, nd, is_x_turn);
     bool owns_slot = false;
 
+    // Lock-free memo protocol:
+    //  - st=2 => solved, return cached value.
+    //  - st=1 => another thread is solving, yield and retry.
+    //  - st=0 => try to claim ownership by CAS(0 -> 1).
     while (true) {
         uint32_t packed = memo_table[idx].load(memory_order_acquire);
         uint8_t st = packed & 0xFF;
         if (st == 2) {
+            // Fully computed by some thread: return cached survival depth.
             return (packed >> 8) & 0xFF;
         }
         if (st == 1) {
-            // Another thread computing. Wait/Backoff? 
-            // Because depth is strictly encoded in the state_index now, there are NO cyclic dependencies possible!
-            // We can actually just yield and wait for the other thread to finish, avoiding all redundant work.
+            // In-progress elsewhere; waiting is safe because depth is part of the key,
+            // so there are no same-key recursive cycles.
             this_thread::yield(); 
             continue; 
         }
         
         uint32_t expected = 0;
         if (memo_table[idx].compare_exchange_weak(expected, 1, memory_order_acq_rel, memory_order_acquire)) {
+            // This thread now owns computation of this state.
             owns_slot = true;
             break; 
         }
     }
 
+    // Track number of states this run actually computed (not cache hits).
     states_computed.fetch_add(1, memory_order_relaxed);
 
+    // Default outputs before branching by side-to-move.
     int result = 0;
     int best_move_x = x_pos;
     int best_combo_d[5];
     for (int i = 0; i < nd; ++i) best_combo_d[i] = dets[i]; // default
 
     if (is_x_turn) {
+        // Mr. X chooses a move maximizing guaranteed survival.
         int min_dist = min_dist_to_dets(x_pos, dets, nd);
         if (min_dist > depth_left) {
-            result = depth_left;
-            if (!adj[x_pos].empty()) {
-                best_move_x = adj[x_pos][0];
-                int best_d = -1;
-                for (int mv : adj[x_pos]) {
-                    int d = min_dist_to_dets(mv, dets, nd);
-                    if (d > best_d) { best_d = d; best_move_x = mv; }
+            // Fast-path: if every detective is farther than the remaining horizon,
+            // Mr. X is guaranteed to survive depth_left rounds from this state.
+            // We still pick a legal move that maximizes separation as a policy action.
+            int best_d = -1;
+            for (int mv : adj[x_pos]) {
+                // Mr. X cannot move onto an occupied detective node.
+                if (is_det_occupied(mv, dets, nd)) continue;
+                int d = min_dist_to_dets(mv, dets, nd);
+                if (d > best_d) {
+                    best_d = d;
+                    best_move_x = mv;
                 }
             }
-        } else {
-            const auto &moves = adj[x_pos];
-            if (moves.empty()) {
+            if (best_d < 0) {
+                // No legal moves from this node under occupancy constraints.
                 result = 0;
             } else {
+                // Guaranteed to survive the full remaining horizon.
+                result = depth_left;
+            }
+        } else {
+            // Exact lookahead path: horizon is close enough that detective responses
+            // can matter, so evaluate legal Mr. X moves recursively.
+            vector<int> moves;
+            moves.reserve(adj[x_pos].size());
+            for (int mv : adj[x_pos]) {
+                // Filter to legal Mr. X moves only.
+                if (!is_det_occupied(mv, dets, nd)) moves.push_back(mv);
+            }
+
+            if (moves.empty()) {
+                // Trapped: no legal move means immediate loss from this state.
+                result = 0;
+            } else {
+                // Heuristic ordering: try moves that increase distance first for early pruning.
                 vector<int> ordered = moves;
                 sort(ordered.begin(), ordered.end(), [&](int a, int b) {
                     int da = min_dist_to_dets(a, dets, nd);
@@ -299,38 +339,45 @@ static int solve(int depth_left, int x_pos, int* dets, int nd, bool is_x_turn) {
                 int best = -1;
                 best_move_x = ordered[0];
                 for (int mv : ordered) {
+                    // Alternate to detectives with one less round remaining.
                     int child = solve(depth_left - 1, mv, dets, nd, false);
                     int survival = 1 + child;
                     if (survival > best) {
                         best = survival;
                         best_move_x = mv;
                     }
+                    // Cannot improve beyond full remaining horizon.
                     if (best >= depth_left) break; // Pruned
                 }
                 
+                // Clamp to valid survival range for this node.
                 if (best < 0) best = 0;
                 if (best > depth_left) best = depth_left;
                 result = best;
             }
         }
     } else {
-        // Detectives turn
+        // Detectives move jointly to minimize Mr. X survival.
         DetRecurseCtx ctx;
         ctx.depth_left = depth_left;
         ctx.x_pos = x_pos;
         ctx.nd = nd;
+        // Sentinel > depth_left means "not improved yet".
         ctx.worst_depth = depth_left + 1;
         for (int i = 0; i < nd; ++i) {
             ctx.orig[i] = dets[i];
             ctx.best_combo[i] = dets[i];
         }
 
+        // Enumerate detective move combinations and pick minimizing response.
         det_recurse(ctx, 0);
+        // If no combination improved sentinel, cap at depth_left.
         result = (ctx.worst_depth > depth_left) ? depth_left : ctx.worst_depth;
         for (int i = 0; i < nd; ++i) best_combo_d[i] = ctx.best_combo[i];
     }
 
     if (owns_slot) {
+        // Publish computed value and mark slot done.
         uint32_t final_pack = 2 | ((uint32_t)result << 8);
         memo_table[idx].store(final_pack, memory_order_release);
     }
@@ -465,16 +512,25 @@ static void write_binary_policy(const string &path,
                 int best_move_x = x;
                 int min_dist = min_dist_to_dets(x, tuple, ND);
                 if (min_dist > best_x_depth) {
-                    if (!adj[x].empty()) {
-                        best_move_x = adj[x][0];
-                        int best_d = -1;
-                        for (int mv : adj[x]) {
-                            int dist = min_dist_to_dets(mv, tuple, ND);
-                            if (dist > best_d) { best_d = dist; best_move_x = mv; }
+                    // Same fast-path used by solve(): guaranteed survival at this
+                    // depth, so choose a legal move that increases distance.
+                    int best_d = -1;
+                    for (int mv : adj[x]) {
+                        if (is_det_occupied(mv, tuple, ND)) continue;
+                        int dist = min_dist_to_dets(mv, tuple, ND);
+                        if (dist > best_d) {
+                            best_d = dist;
+                            best_move_x = mv;
                         }
                     }
                 } else {
-                    const auto &moves = adj[x];
+                    // Same exact path used by solve(): reconstruct the best legal
+                    // Mr. X move by reading already-computed child values.
+                    vector<int> moves;
+                    moves.reserve(adj[x].size());
+                    for (int mv : adj[x]) {
+                        if (!is_det_occupied(mv, tuple, ND)) moves.push_back(mv);
+                    }
                     if (!moves.empty()) {
                         int best = -1;
                         best_move_x = moves[0];
