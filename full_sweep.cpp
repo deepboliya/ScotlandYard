@@ -64,10 +64,9 @@ static size_t memo_table_size = 0;
 // Because we always evaluate the whole depth iteratively or to completion,
 // we don't need 'depth_used' to handle dynamic query depths anymore.
 static unique_ptr<atomic<uint32_t>[]> memo_table;
-static unique_ptr<uint8_t[]> best_mrx_move_table;
-static unique_ptr<uint8_t[]> best_det_move_table;
 
 static atomic<uint64_t> states_computed(0);
+static atomic<uint64_t> root_states_computed(0);
 
 static void read_map(const string &path) {
     ifstream fin(path);
@@ -332,15 +331,6 @@ static int solve(int depth_left, int x_pos, int* dets, int nd, bool is_x_turn) {
     }
 
     if (owns_slot) {
-        if (best_mrx_move_table) {
-            if (is_x_turn) {
-                best_mrx_move_table[idx] = (uint8_t)best_move_x;
-            } else {
-                for (int i = 0; i < nd; ++i) {
-                    best_det_move_table[idx * MAX_DETS + i] = (uint8_t)best_combo_d[i];
-                }
-            }
-        }
         uint32_t final_pack = 2 | ((uint32_t)result << 8);
         memo_table[idx].store(final_pack, memory_order_release);
     }
@@ -381,6 +371,53 @@ static void write_u32_le(ofstream &f, uint32_t v) {
     f.write(buf, 4);
 }
 
+struct DetLookaheadCtx {
+    int depth_left;
+    int x_pos;
+    int nd;
+    int orig[5];
+    int combo[5];
+    int best_combo[5];
+    int worst_depth;
+};
+
+static void det_lookahead_recurse(DetLookaheadCtx &ctx, int det_idx) {
+    if (ctx.worst_depth == 0) return;
+
+    if (det_idx == ctx.nd) {
+        int sorted[5];
+        for (int i = 0; i < ctx.nd; ++i) sorted[i] = ctx.combo[i];
+        sort(sorted, sorted + ctx.nd);
+        size_t c_idx = state_index(ctx.depth_left, ctx.x_pos, sorted, ctx.nd, true);
+        uint32_t c_pk = memo_table[c_idx].load(memory_order_relaxed);
+        int d = 0;
+        if ((c_pk & 0xFF) == 2) {
+            d = (c_pk >> 8) & 0xFF;
+        } else {
+            // Should not happen if MAX_ROUNDS sweep is fully complete
+        }
+        
+        if (d < ctx.worst_depth) {
+            ctx.worst_depth = d;
+            for (int i = 0; i < ctx.nd; ++i) ctx.best_combo[i] = ctx.combo[i];
+        }
+        return;
+    }
+
+    const auto &moves = adj[ctx.orig[det_idx]];
+    if (moves.empty()) {
+        ctx.combo[det_idx] = ctx.orig[det_idx];
+        det_lookahead_recurse(ctx, det_idx + 1);
+        return;
+    }
+
+    for (int mv : moves) {
+        ctx.combo[det_idx] = mv;
+        det_lookahead_recurse(ctx, det_idx + 1);
+        if (ctx.worst_depth == 0) return;
+    }
+}
+
 static void write_binary_policy(const string &path,
                                 const string &map_path,
                                 double solve_time_s,
@@ -410,34 +447,93 @@ static void write_binary_policy(const string &path,
             for(int i=0; i<ND; ++i) if(tuple[i] == x) occupied = true;
             if(occupied) continue;
 
-            // X's highest computed depth
+            // X's highest computed depth (which will safely just be MAX_ROUNDS for full sweep root states)
+            // But to be robust, we find the highest solved depth like before.
+            int best_x_depth = 0;
+            uint32_t best_x_val = 0;
             for (int d = MAX_ROUNDS; d >= 1; --d) {
                 size_t idx = state_index(d, x, tuple, ND, true);
                 uint32_t pk = memo_table[idx].load(memory_order_relaxed);
                 if ((pk & 0xFF) == 2) {
-                    MrxRec r{};
-                    r.data[0] = (uint8_t)x;
-                    for (int i = 0; i < ND; ++i) r.data[1 + i] = (uint8_t)tuple[i];
-                    r.data[1 + ND] = best_mrx_move_table[idx];
-                    r.data[2 + ND] = (pk >> 8) & 0xFF;
-                    mrx_recs.push_back(r);
+                    best_x_depth = d;
+                    best_x_val = pk;
                     break;
                 }
             }
 
+            if (best_x_depth > 0) {
+                int best_move_x = x;
+                int min_dist = min_dist_to_dets(x, tuple, ND);
+                if (min_dist > best_x_depth) {
+                    if (!adj[x].empty()) {
+                        best_move_x = adj[x][0];
+                        int best_d = -1;
+                        for (int mv : adj[x]) {
+                            int dist = min_dist_to_dets(mv, tuple, ND);
+                            if (dist > best_d) { best_d = dist; best_move_x = mv; }
+                        }
+                    }
+                } else {
+                    const auto &moves = adj[x];
+                    if (!moves.empty()) {
+                        int best = -1;
+                        best_move_x = moves[0];
+                        for (int mv : moves) {
+                            int child = 0;
+                            size_t c_idx = state_index(best_x_depth - 1, mv, tuple, ND, false);
+                            uint32_t c_pk = memo_table[c_idx].load(memory_order_relaxed);
+                            if ((c_pk & 0xFF) == 2) {
+                                child = (c_pk >> 8) & 0xFF;
+                            }
+                            int survival = 1 + child;
+                            if (survival > best) {
+                                best = survival;
+                                best_move_x = mv;
+                            }
+                        }
+                    }
+                }
+
+                MrxRec r{};
+                r.data[0] = (uint8_t)x;
+                for (int i = 0; i < ND; ++i) r.data[1 + i] = (uint8_t)tuple[i];
+                r.data[1 + ND] = (uint8_t)best_move_x;
+                r.data[2 + ND] = (best_x_val >> 8) & 0xFF;
+                mrx_recs.push_back(r);
+            }
+
             // Dets' highest computed depth
+            int best_d_depth = 0;
+            uint32_t best_d_val = 0;
             for (int d = MAX_ROUNDS; d >= 1; --d) {
                 size_t idx = state_index(d, x, tuple, ND, false);
                 uint32_t pk = memo_table[idx].load(memory_order_relaxed);
                 if ((pk & 0xFF) == 2) {
-                    DetRec r{};
-                    r.data[0] = (uint8_t)x;
-                    for (int i = 0; i < ND; ++i) r.data[1 + i] = (uint8_t)tuple[i];
-                    for (int i = 0; i < ND; ++i) r.data[1 + ND + i] = best_det_move_table[idx * MAX_DETS + i];
-                    r.data[1 + 2 * ND] = (pk >> 8) & 0xFF;
-                    det_recs.push_back(r);
+                    best_d_depth = d;
+                    best_d_val = pk;
                     break;
                 }
+            }
+
+            if (best_d_depth > 0) {
+                DetLookaheadCtx ctx;
+                ctx.depth_left = best_d_depth;
+                ctx.x_pos = x;
+                ctx.nd = ND;
+                ctx.worst_depth = best_d_depth + 1;
+                for (int i = 0; i < ND; ++i) {
+                    ctx.orig[i] = tuple[i];
+                    ctx.best_combo[i] = tuple[i];
+                }
+                
+                det_lookahead_recurse(ctx, 0);
+
+                DetRec r{};
+                r.data[0] = (uint8_t)x;
+                for (int i = 0; i < ND; ++i) r.data[1 + i] = (uint8_t)tuple[i];
+                for (int i = 0; i < ND; ++i) r.data[1 + ND + i] = (uint8_t)ctx.best_combo[i];
+                r.data[1 + 2 * ND] = (best_d_val >> 8) & 0xFF;
+                det_recs.push_back(r);
             }
         }
     });
@@ -556,10 +652,6 @@ int main(int argc, char *argv[]) {
     }
 
     memo_table = make_unique<atomic<uint32_t>[]>(total_states);
-    if (!policy_out_path.empty()) {
-        best_mrx_move_table = make_unique<uint8_t[]>(total_states);
-        best_det_move_table = make_unique<uint8_t[]>(total_states * MAX_DETS);
-    }
     for (size_t i = 0; i < total_states; ++i)
         memo_table[i].store(0, memory_order_relaxed);
 
@@ -568,28 +660,9 @@ int main(int argc, char *argv[]) {
          << (double)(total_states * sizeof(uint32_t)) / (1024.0 * 1024.0) << " MiB\n";
 
     states_computed.store(0, memory_order_relaxed);
+    root_states_computed.store(0, memory_order_relaxed);
 
     auto t0 = chrono::high_resolution_clock::now();
-
-    // Start progress bar thread
-    atomic<bool> sweep_done(false);
-    thread progress_thread([&]() {
-        auto start_time = chrono::high_resolution_clock::now();
-        while (!sweep_done.load(memory_order_relaxed)) {
-            this_thread::sleep_for(chrono::milliseconds(500));
-            uint64_t cur = states_computed.load(memory_order_relaxed);
-            auto now = chrono::high_resolution_clock::now();
-            double elapsed = chrono::duration<double>(now - start_time).count();
-            double rate = elapsed > 0 ? cur / elapsed : 0;
-            
-            double percent = (double)cur / total_states * 100.0;
-            if (percent > 100.0) percent = 100.0;
-            
-            cout << "\r[Progress] Computed: " << cur << " / " << total_states << " states "
-                 << "(" << fixed << setprecision(2) << percent << "%) "
-                 << "@ " << fixed << setprecision(1) << rate << " states/sec" << flush;
-        }
-    });
 
     // Valid Mr. X starting positions
     vector<int> mrx_candidates;
@@ -614,6 +687,27 @@ int main(int argc, char *argv[]) {
 
     cout << "Total exact starting game states to evaluate: " << starting_states.size() << "\n";
 
+    // Start progress bar thread
+    atomic<bool> sweep_done(false);
+    thread progress_thread([&]() {
+        auto start_time = chrono::high_resolution_clock::now();
+        size_t total_roots = starting_states.size();
+        while (!sweep_done.load(memory_order_relaxed)) {
+            this_thread::sleep_for(chrono::milliseconds(500));
+            uint64_t cur_roots = root_states_computed.load(memory_order_relaxed);
+            auto now = chrono::high_resolution_clock::now();
+            double elapsed = chrono::duration<double>(now - start_time).count();
+            double rate = elapsed > 0 ? cur_roots / elapsed : 0;
+            
+            double percent = total_roots > 0 ? (double)cur_roots / total_roots * 100.0 : 100.0;
+            if (percent > 100.0) percent = 100.0;
+            
+            cout << "\r[Progress] Evaluated Root Configs: " << cur_roots << " / " << total_roots 
+                 << " (" << fixed << setprecision(2) << percent << "%) "
+                 << "@ " << fixed << setprecision(1) << rate << " configs/sec" << flush;
+        }
+    });
+
     if (NUM_THREADS > 1) {
         atomic<size_t> next_idx(0);
         vector<thread> workers;
@@ -630,6 +724,7 @@ int main(int argc, char *argv[]) {
                     // We don't need to store the result locally because solve() already 
                     // writes it to the global memo_table natively.
                     solve(MAX_ROUNDS, mrx, local_dets, ND, true);
+                    root_states_computed.fetch_add(1, memory_order_relaxed);
                 }
             });
         }
@@ -640,6 +735,7 @@ int main(int argc, char *argv[]) {
             int mrx = state.first;
             for (int j = 0; j < ND; ++j) local_dets[j] = state.second[j];
             solve(MAX_ROUNDS, mrx, local_dets, ND, true);
+            root_states_computed.fetch_add(1, memory_order_relaxed);
         }
     }
 
