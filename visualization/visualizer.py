@@ -1,11 +1,8 @@
 """Interactive Scotland Yard visualiser built on matplotlib + networkx.
 
-Two usage modes
----------------
-* **Observer** (``run``): watch AI strategies play.
-  Press **N** step · **R** round · **A** auto-play · **Q** quit.
-* **Interactive** (``run_interactive``): play as Mr. X by clicking on
-  highlighted nodes; detectives are driven by their strategy.
+Interactive mode (``run_interactive``): play as either Mr. X or detectives
+by clicking on highlighted nodes.
+Press **N** to play the best policy move · **B** undo · **Q** quit.
 """
 
 from __future__ import annotations
@@ -58,6 +55,8 @@ class GameVisualizer:
         hint_policy: dict | None = None,
         guaranteed_survival: int | None = None,
         survival_fn=None,
+        mrx_policy: dict | None = None,
+        det_policy: dict | None = None,
     ):
         self.engine = engine
         self.mode_label = mode_label
@@ -66,6 +65,8 @@ class GameVisualizer:
         self.hint_policy = hint_policy
         self.guaranteed_survival = guaranteed_survival
         self.survival_fn = survival_fn
+        self.mrx_policy = mrx_policy
+        self.det_policy = det_policy
 
         # networkx graph (purely for drawing)
         self.G = nx.Graph()
@@ -79,6 +80,10 @@ class GameVisualizer:
         self._selected_node: Optional[int] = None
         self._undo_requested = False
         self._auto_delay = 0.5
+        self._current_player_id: Optional[str] = None
+        self._detective_manual_move_started = False  # True if human clicked for any detective this turn
+        self._detective_auto_moves: Optional[List[int]] = None  # Stores all detective moves when N is pressed
+        self._auto_move_used = False  # True when N was pressed to auto-play
 
         # matplotlib figure
         self.fig, self.ax = plt.subplots(1, 1, figsize=figsize)
@@ -390,6 +395,9 @@ class GameVisualizer:
         node = self._closest_node(event.xdata, event.ydata)
         if node is not None and node in self._valid_moves:
             self._selected_node = node
+            # Mark that human made a manual move for a detective
+            if self._current_player_id and self._current_player_id.startswith("detective_"):
+                self._detective_manual_move_started = True
 
     @property
     def _waiting_for_click(self) -> bool:
@@ -397,9 +405,28 @@ class GameVisualizer:
         return bool(self._valid_moves)
 
     def _on_key(self, event) -> None:
-        # When waiting for a human click, only allow undo and quit.
+        # When waiting for a human click, allow N (play best move), undo, and quit.
         if self._waiting_for_click:
-            if event.key == "b":
+            if event.key == "n":
+                # Block N if human already started making detective moves manually
+                if self._detective_manual_move_started:
+                    return
+                # For Mr. X, just select the best move
+                if self._current_player_id == "mrx":
+                    best_move = self._get_policy_move()
+                    if best_move is not None and best_move in self._valid_moves:
+                        self._selected_node = best_move
+                        self._auto_move_used = True
+                # For detectives, store all moves to auto-play them all at once
+                elif self._current_player_id and self._current_player_id.startswith("detective_"):
+                    all_moves = self._get_all_detective_policy_moves()
+                    if all_moves is not None:
+                        self._detective_auto_moves = all_moves
+                        self._auto_move_used = True
+                        det_idx = int(self._current_player_id.split("_")[1])
+                        if det_idx < len(all_moves) and all_moves[det_idx] in self._valid_moves:
+                            self._selected_node = all_moves[det_idx]
+            elif event.key == "b":
                 if self.engine.undo():
                     s = self.engine.state
                     if not s.game_over and s.is_mrx_turn:
@@ -436,6 +463,32 @@ class GameVisualizer:
         elif event.key == "q":
             plt.close(self.fig)
 
+    def _get_policy_move(self) -> int | None:
+        """Get the best move from policy for the current player."""
+        state = self.engine.state
+        key = (state.mrx_position, *state.detective_positions)
+        
+        if self._current_player_id == "mrx":
+            if self.mrx_policy is not None:
+                return self.mrx_policy.get(key)
+        elif self._current_player_id is not None and self._current_player_id.startswith("detective_"):
+            if self.det_policy is not None:
+                moves = self.det_policy.get(key)
+                if moves is not None:
+                    # Extract detective index from player_id (e.g., "detective_0" -> 0)
+                    det_idx = int(self._current_player_id.split("_")[1])
+                    if det_idx < len(moves):
+                        return moves[det_idx]
+        return None
+
+    def _get_all_detective_policy_moves(self) -> List[int] | None:
+        """Get all detective moves from policy for the current state."""
+        if self.det_policy is None:
+            return None
+        state = self.engine.state
+        key = (state.mrx_position, *state.detective_positions)
+        return self.det_policy.get(key)
+
     # ── run modes ───────────────────────────────────────────────────────
 
     def run(self) -> None:
@@ -467,8 +520,12 @@ class GameVisualizer:
                     continue
                 self.draw()
 
+                # Skip pause if auto-move (N) was used - go straight to next player
+                if self._auto_move_used:
+                    self._auto_move_used = False
+                    plt.pause(0.05)  # minimal pause for UI update
                 # brief pause so the user can see each intermediate state
-                if not self.engine.state.is_mrx_turn:
+                elif not self.engine.state.is_mrx_turn:
                     plt.pause(0.4)
                 else:
                     plt.pause(0.2)
@@ -495,6 +552,21 @@ class GameVisualizer:
         Intended to be passed as ``move_selector`` to
         :class:`strategies.human.HumanStrategy`.
         """
+        # Reset flags when Mr. X's turn starts
+        if player_id == "mrx":
+            self._detective_manual_move_started = False
+            self._detective_auto_moves = None
+        
+        self._current_player_id = player_id
+        
+        # If auto-moves are set for detectives, return the stored move immediately
+        if player_id.startswith("detective_") and self._detective_auto_moves is not None:
+            det_idx = int(player_id.split("_")[1])
+            if det_idx < len(self._detective_auto_moves):
+                move = self._detective_auto_moves[det_idx]
+                if move in valid_moves:
+                    return move
+        
         self._valid_moves = list(valid_moves)
         self._selected_node = None
         self._undo_requested = False

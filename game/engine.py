@@ -202,15 +202,17 @@ class GameEngine:
         # Keep positions sorted (detectives are interchangeable).
         s.detective_positions.sort()
 
+        # Log moves before incrementing round number
+        if self.on_move:
+            for i, (frm, to) in enumerate(zip(from_nodes, moves)):
+                self.on_move(f"detective_{i}", frm, to)
+
         # Round complete — increment round number.
         s.round_number += 1
 
         # Advance to Mr. X's turn.
         s.current_player = "mrx"
 
-        if self.on_move:
-            for i, (frm, to) in enumerate(zip(from_nodes, moves)):
-                self.on_move(f"detective_{i}", frm, to)
         return moves
 
     # ---- convenience ----------------------------------------------------

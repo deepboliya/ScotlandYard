@@ -2,11 +2,8 @@
 
 Usage examples
 --------------
-    # Watch two random AIs play
-    python main.py
-
-    # Play as Mr. X (click to move)
-    python main.py --mode play-mrx
+    # Interactive play (click to move either side, N for best move)
+    python main.py --mrx-policy policy.bin --det-policy policy.bin
 
     # Custom starting positions
     python main.py --mrx 1 --detectives 5 10
@@ -261,15 +258,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Scotland Yard"
     )
-    parser.add_argument(
-        "--mode",
-        choices=["auto", "play-mrx", "play-detective"],
-        default="auto",
-        help=(
-            "auto: watch AI play. play-mrx: play as Mr. X. "
-            "play-detective: play as detectives."
-        ),
-    )
+
     parser.add_argument("--map", type=str, default="first50",
                         help="Map name in maps/ directory, without .txt (default: first50)")
     parser.add_argument("--mrx", type=int, default=1,
@@ -300,15 +289,11 @@ def main() -> None:
             "overrides --mrx/--detectives/--max-rounds/--map)"
         ),
     )
-    parser.add_argument(
-        "--help-human",
-        action="store_true",
-        help="Highlight the optimal move from policy files in light yellow",
-    )
     args = parser.parse_args()
 
-    if args.help_human and not (args.mrx_policy or args.det_policy):
-        print("Error: --help-human requires --mrx-policy and/or --det-policy.")
+    # Both policy files are required
+    if not args.mrx_policy or not args.det_policy:
+        print("Error: Both --mrx-policy and --det-policy are required.")
         sys.exit(1)
 
     loaded_policy = None
@@ -511,135 +496,46 @@ def main() -> None:
         print(f"\n{final.result_str}  (round {final.round_number})")
         return
 
-    # ── graphical modes ─────────────────────────────────────────────────
+    # ── graphical interactive mode ─────────────────────────────────────
     from visualization.visualizer import GameVisualizer
 
-    # Build serialized hint policy from loaded file when --help-human
+    # Build hint policy from loaded files
     hint_policy: dict | None = None
-    if args.help_human and loaded_policy is not None:
+    if loaded_policy is not None:
         hint_policy = dict(loaded_policy)
-        if loaded_det_policy:
-            hint_policy.update(loaded_det_policy)
+    if loaded_det_policy:
+        if hint_policy is None:
+            hint_policy = {}
+        hint_policy.update(loaded_det_policy)
 
-    if args.mode == "play-mrx":
-        # HumanStrategy for Mr. X — move_selector wired up below
-        mrx_strat = HumanStrategy()
-        if loaded_det_policy:
-            if is_binary_policy:
-                det_strat = BinaryPolicyStrategy(
-                    {},
-                    binary_det_policy=loaded_det_policy,
-                    strict=False,
-                )
-            else:
-                det_strat = SerializedPolicyStrategy(
-                    {},
-                    serialized_det_policy=loaded_det_policy,
-                    strict=False,
-                )
-        else:
-            det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state, survival_fn)
-        engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=log)
-        viz = GameVisualizer(
-            engine,
-            mode_label="Play as Mr. X",
-            mrx_policy_label=_describe_strategy(mrx_strat),
-            detective_policy_label=_describe_detective_strategies(det_strat),
-            hint_policy=hint_policy,
-            guaranteed_survival=guaranteed_survival,
-            survival_fn=survival_fn,
-        )
+    # Use HumanStrategy for both Mr. X and detectives
+    mrx_strat = HumanStrategy()
+    det_strat = HumanStrategy()
 
-        # connect click-to-move
-        mrx_strat.move_selector = viz.wait_for_click
+    log = _make_move_logger(state, survival_fn)
+    engine = GameEngine(board, state, mrx_strat, det_strat, on_move=log)
+    viz = GameVisualizer(
+        engine,
+        mode_label="Interactive",
+        mrx_policy_label=_describe_strategy(mrx_strat),
+        detective_policy_label=_describe_detective_strategies(det_strat),
+        hint_policy=hint_policy,
+        guaranteed_survival=guaranteed_survival,
+        survival_fn=survival_fn,
+        mrx_policy=loaded_policy,
+        det_policy=loaded_det_policy,
+    )
 
-        print("╔══════════════════════════════════════════╗")
-        print("║   Scotland Yard — Play as Mr. X         ║")
-        print("║   Click green nodes to move.             ║")
-        print("║   Detectives move automatically.         ║")
-        print("╚══════════════════════════════════════════╝\n")
-        viz.run_interactive()
+    # Connect click-to-move for both strategies
+    mrx_strat.move_selector = viz.wait_for_click
+    det_strat.move_selector = viz.wait_for_click
 
-    elif args.mode == "play-detective":
-        if loaded_policy is not None:
-            if is_binary_policy:
-                mrx_strat = BinaryPolicyStrategy(loaded_policy, strict=True)
-            else:
-                mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            print("Using stored Mr. X policy from file.")
-        else:
-            mrx_strat = RandomStrategy(seed=args.seed)
-            print("No policy file; Mr. X plays randomly.")
-
-        det_strat = HumanStrategy()
-        log = _make_move_logger(state, survival_fn)
-        engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=log)
-        viz = GameVisualizer(
-            engine,
-            mode_label="Play as Detectives",
-            mrx_policy_label=_describe_strategy(mrx_strat),
-            detective_policy_label=_describe_detective_strategies(det_strat),
-            hint_policy=hint_policy,
-            guaranteed_survival=guaranteed_survival,
-            survival_fn=survival_fn,
-        )
-
-        det_strat.move_selector = viz.wait_for_click
-
-        print("╔══════════════════════════════════════════╗")
-        print("║ Scotland Yard — Play as Detectives       ║")
-        print("║ Mr. X uses policy file when available.   ║")
-        print("║ Click green nodes for each detective.    ║")
-        print("╚══════════════════════════════════════════╝\n")
-        viz.run_interactive()
-
-    else:
-        if loaded_policy is not None:
-            if is_binary_policy:
-                mrx_strat = BinaryPolicyStrategy(loaded_policy, strict=True)
-            else:
-                mrx_strat = SerializedPolicyStrategy(loaded_policy, strict=True)
-            print("Using stored Mr. X policy from file.")
-        else:
-            mrx_strat = RandomStrategy(seed=args.seed)
-            print("No policy file; Mr. X plays randomly.")
-
-        if loaded_det_policy:
-            if is_binary_policy:
-                det_strat = BinaryPolicyStrategy(
-                    {},
-                    binary_det_policy=loaded_det_policy,
-                    strict=False,
-                )
-            else:
-                det_strat = SerializedPolicyStrategy(
-                    {},
-                    serialized_det_policy=loaded_det_policy,
-                    strict=False,
-                )
-        else:
-            det_strat = RandomStrategy(seed=(args.seed or 0) + 1)
-        log = _make_move_logger(state, survival_fn)
-        engine = GameEngine(board, state, mrx_strat, det_strat,
-                            on_move=log)
-        viz = GameVisualizer(
-            engine,
-            mode_label="Observer",
-            mrx_policy_label=_describe_strategy(mrx_strat),
-            detective_policy_label=_describe_detective_strategies(det_strat),
-            hint_policy=hint_policy,
-            guaranteed_survival=guaranteed_survival,
-            survival_fn=survival_fn,
-        )
-
-        print("╔═══════════════════════════════════════════════════╗")
-        print("║   Scotland Yard — Observer Mode                   ║")
-        print("║   [N] Step [R] Round [B] Undo [A] Auto [Q] Quit   ║")
-        print("╚═══════════════════════════════════════════════════╝\n")
-        viz.run()
+    print("╔═══════════════════════════════════════════════════════╗")
+    print("║   Scotland Yard — Interactive Mode                    ║")
+    print("║   Click green nodes to move for either side.          ║")
+    print("║   [N] Play best move [B] Undo [Q] Quit                ║")
+    print("╚═══════════════════════════════════════════════════════╝\n")
+    viz.run_interactive()
 
 
 if __name__ == "__main__":
