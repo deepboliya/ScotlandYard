@@ -683,6 +683,22 @@ int main(int argc, char *argv[]) {
 
     read_map(map_path);
 
+    // Generate default policy output path if not specified: {map_name}_d{ND}_r{MAX_ROUNDS}.bin
+    if (policy_out_path.empty()) {
+        string map_name = map_path;
+        // Remove directory path
+        size_t last_slash = map_name.find_last_of("/\\");
+        if (last_slash != string::npos) {
+            map_name = map_name.substr(last_slash + 1);
+        }
+        // Remove .txt extension
+        size_t dot_pos = map_name.rfind(".txt");
+        if (dot_pos != string::npos) {
+            map_name = map_name.substr(0, dot_pos);
+        }
+        policy_out_path = map_name + "_d" + to_string(ND) + "_r" + to_string(MAX_ROUNDS) + ".bin";
+    }
+
     cout << "Map: " << map_path << "  (" << num_nodes << " nodes)\n";
     cout << "Detectives: " << ND << "  |  Max rounds: " << MAX_ROUNDS << "  |  Threads: " << NUM_THREADS << "\n";
 
@@ -840,9 +856,7 @@ int main(int argc, char *argv[]) {
          << escaped << " out of " << starting_states.size() << " starting positions ("
          << fixed << setprecision(2) << (escaped * 100.0 / starting_states.size()) << "%).\n";
 
-    if (!policy_out_path.empty()) {
-        write_binary_policy(policy_out_path, map_path, solve_s, states_computed.load(memory_order_relaxed));
-    }
+    write_binary_policy(policy_out_path, map_path, solve_s, states_computed.load(memory_order_relaxed));
 
     return 0;
 }
