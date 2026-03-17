@@ -2,7 +2,7 @@
 
 Interactive mode (``run_interactive``): play as either Mr. X or detectives
 by clicking on highlighted nodes.
-Press **N** to play the best policy move · **B** undo · **Q** quit.
+Press **N** to play the best policy move · **Q** quit.
 """
 
 from __future__ import annotations
@@ -14,10 +14,6 @@ import networkx as nx
 from typing import List, Optional
 
 from game.engine import GameEngine
-
-
-class _UndoRequested(Exception):
-    """Raised inside wait_for_click when the user presses undo."""
 
 
 class GameVisualizer:
@@ -74,8 +70,6 @@ class GameVisualizer:
         # interaction state
         self._valid_moves: List[int] = []
         self._selected_node: Optional[int] = None
-        self._undo_requested = False
-        self._auto_delay = 0.5
         self._current_player_id: Optional[str] = None
         self._detective_manual_move_started = False  # True if human clicked for any detective this turn
         self._detective_auto_moves: Optional[List[int]] = None  # Stores all detective moves when N is pressed
@@ -284,9 +278,9 @@ class GameVisualizer:
 
         # help bar
         if self._valid_moves:
-            help_txt = "Click a green node to move  │  [B] Undo  │  [Q] Quit"
+            help_txt = "Click a green node to move  │  [Q] Quit"
         else:
-            help_txt = "[N] Step  [R] Round  [B] Undo  [A] Auto  [Q] Quit"
+            help_txt = "[N] Step  [R] Round  [Q] Quit"
         self._fig_texts.append(self.fig.text(
             0.99, 0.01, help_txt,
             ha="right", va="bottom",
@@ -347,7 +341,7 @@ class GameVisualizer:
         return bool(self._valid_moves)
 
     def _on_key(self, event) -> None:
-        # When waiting for a human click, allow N (play best move), undo, and quit.
+        # When waiting for a human click, allow N (play best move) and Q (quit).
         if self._waiting_for_click:
             if event.key == "n":
                 # Block N if human already started making detective moves manually
@@ -368,41 +362,12 @@ class GameVisualizer:
                         det_idx = int(self._current_player_id.split("_")[1])
                         if det_idx < len(all_moves) and all_moves[det_idx] in self._valid_moves:
                             self._selected_node = all_moves[det_idx]
-            elif event.key == "b":
-                if self.engine.undo():
-                    s = self.engine.state
-                    if not s.game_over and s.is_mrx_turn:
-                        self._valid_moves = self.engine.get_mrx_valid_moves()
-                    else:
-                        self._valid_moves = []
-                    self._selected_node = None
-                    self._undo_requested = True
-                    self.draw()
             elif event.key == "q":
                 plt.close(self.fig)
             return
 
-        if event.key == "n":
-            if not self.engine.state.game_over:
-                self.engine.step()
-                self.draw()
-        elif event.key == "r":
-            if not self.engine.state.game_over:
-                self.engine.play_round()
-                self.draw()
-        elif event.key == "b":
-            if self.engine.undo():
-                s = self.engine.state
-                if not s.game_over and s.is_mrx_turn:
-                    self._valid_moves = self.engine.get_mrx_valid_moves()
-                else:
-                    self._valid_moves = []
-                self._selected_node = None
-                self._undo_requested = True
-                self.draw()
-        elif event.key == "a":
-            self._auto_play()
-        elif event.key == "q":
+        # Not waiting for click (e.g., game over) - handle quit
+        if event.key == "q":
             plt.close(self.fig)
 
     def _get_policy_move(self) -> int | None:
@@ -457,16 +422,7 @@ class GameVisualizer:
 
         try:
             while not self.engine.state.game_over:
-                try:
-                    # Mr. X's turn → wait for human click inside
-                    # engine.step() via HumanStrategy → wait_for_click.
-                    self.engine.step()
-                except _UndoRequested:
-                    # Undo pressed during wait_for_click — the engine
-                    # state has already been rolled back by _on_key.
-                    # Redraw and restart the loop.
-                    self.draw()
-                    continue
+                self.engine.step()
                 self.draw()
 
                 # Skip pause if auto-move (N) was used - go straight to next player
@@ -518,14 +474,9 @@ class GameVisualizer:
         
         self._valid_moves = list(valid_moves)
         self._selected_node = None
-        self._undo_requested = False
         self.draw()
 
         while self._selected_node is None:
-            if self._undo_requested:
-                self._undo_requested = False
-                self._valid_moves = []
-                raise _UndoRequested()
             if not plt.fignum_exists(self.fig.number):
                 raise SystemExit("Window closed")
             plt.pause(0.05)
@@ -534,11 +485,3 @@ class GameVisualizer:
         self._valid_moves = []
         self._selected_node = None
         return move
-
-    # ── auto-play helper ────────────────────────────────────────────────
-
-    def _auto_play(self) -> None:
-        while not self.engine.state.game_over:
-            self.engine.step()
-            self.draw()
-            plt.pause(self._auto_delay)

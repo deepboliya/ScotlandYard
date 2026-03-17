@@ -528,7 +528,7 @@ def main() -> None:
     print("╔═══════════════════════════════════════════════════════╗")
     print("║   Scotland Yard — Interactive Mode                    ║")
     print("║   Click green nodes to move for either side.          ║")
-    print("║   [N] Play best move [B] Undo [Q] Quit                ║")
+    print("║   [N] Play best move  [Q] Quit                        ║")
     print("╚═══════════════════════════════════════════════════════╝\n")
     viz.run_interactive()
 
