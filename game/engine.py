@@ -167,14 +167,16 @@ class GameEngine:
         move = self.mrx_strategy.choose_move(self.board, s, "mrx", valid)
         assert move in valid, f"Invalid Mr. X move {move}; valid = {valid}"
 
+        # Log move BEFORE mutating state (so survival lookup uses pre-move state)
+        if self.on_move:
+            self.on_move("mrx", from_node, move)
+
         s.mrx_position = move
         s.mrx_history.append(move)
 
         # Advance turn to detectives (or back to mrx if none).
         s.current_player = "detectives" if s.num_detectives else "mrx"
 
-        if self.on_move:
-            self.on_move("mrx", from_node, move)
         return move
 
     def _step_detectives(self) -> List[int]:
@@ -196,16 +198,16 @@ class GameEngine:
                 f"Invalid detective_{i} move {move}; valid = {valid}"
             )
 
+        # Log moves BEFORE mutating state (so survival lookup uses pre-move state)
+        if self.on_move:
+            for i, (frm, to) in enumerate(zip(from_nodes, moves)):
+                self.on_move(f"detective_{i}", frm, to)
+
         for i, move in enumerate(moves):
             s.detective_positions[i] = move
 
         # Keep positions sorted (detectives are interchangeable).
         s.detective_positions.sort()
-
-        # Log moves before incrementing round number
-        if self.on_move:
-            for i, (frm, to) in enumerate(zip(from_nodes, moves)):
-                self.on_move(f"detective_{i}", frm, to)
 
         # Round complete — increment round number.
         s.round_number += 1

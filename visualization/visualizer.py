@@ -38,8 +38,6 @@ class GameVisualizer:
     CLR_DET_EDGE   = "#2471a3"
     CLR_VALID      = "#2ecc71"
     CLR_VALID_EDGE = "#27ae60"
-    CLR_HINT       = "#fffacd"
-    CLR_HINT_EDGE  = "#f0e68c"
     CLR_NODE       = "#ecf0f1"
     CLR_NODE_EDGE  = "#95a5a6"
     CLR_EDGE       = "#bdc3c7"
@@ -52,7 +50,6 @@ class GameVisualizer:
         mode_label: str = "Unknown",
         mrx_policy_label: str = "Unknown",
         detective_policy_label: str = "Unknown",
-        hint_policy: dict | None = None,
         guaranteed_survival: int | None = None,
         survival_fn=None,
         mrx_policy: dict | None = None,
@@ -62,7 +59,6 @@ class GameVisualizer:
         self.mode_label = mode_label
         self.mrx_policy_label = mrx_policy_label
         self.detective_policy_label = detective_policy_label
-        self.hint_policy = hint_policy
         self.guaranteed_survival = guaranteed_survival
         self.survival_fn = survival_fn
         self.mrx_policy = mrx_policy
@@ -157,18 +153,6 @@ class GameVisualizer:
             edge_color=self.CLR_EDGE, width=1.8, alpha=0.55,
         )
 
-        # optimal-move hint (background ring)
-        hint_node = self._lookup_optimal_move(s)
-        self._hint_missing = False
-        if hint_node is not None and hint_node != self._HINT_MISSING:
-            nx.draw_networkx_nodes(
-                self.G, pos, nodelist=[hint_node], ax=self.ax,
-                node_color=self.CLR_HINT, node_size=1000,
-                edgecolors=self.CLR_HINT_EDGE, linewidths=4,
-            )
-        elif hint_node == self._HINT_MISSING:
-            self._hint_missing = True
-
         # categorise nodes
         mrx = s.mrx_position
         det_set = set(s.detective_positions)
@@ -249,17 +233,6 @@ class GameVisualizer:
             fontsize=9, color="gray",
         ))
 
-        # hint-miss warning
-        if self._hint_missing:
-            self.ax.text(
-                0.5, 0.5, "State not available in lookup for help",
-                transform=self.ax.transAxes, ha="center", va="center",
-                fontsize=13, fontweight="bold", color="#b8860b",
-                bbox={"boxstyle": "round,pad=0.4", "facecolor": "#fffacd",
-                      "alpha": 0.92, "edgecolor": "#f0e68c"},
-                zorder=10,
-            )
-
         # policy/mode panel (top-right, outside the graph area)
         policy_text = (
             f"Mode: {self.mode_label}\n"
@@ -335,11 +308,6 @@ class GameVisualizer:
                 label="Valid Move", linewidth=1.5,
             ),
         ]
-        if self.hint_policy is not None:
-            legend.append(mpatches.Patch(
-                facecolor=self.CLR_HINT, edgecolor=self.CLR_HINT_EDGE,
-                label="Optimal Move", linewidth=1.5,
-            ))
         self.ax.legend(handles=legend, loc="lower right", fontsize=10,
                        framealpha=0.9)
 
@@ -347,32 +315,6 @@ class GameVisualizer:
         self.ax.axis("off")
         self.fig.tight_layout()
         self.fig.canvas.draw_idle()
-
-    # Sentinel: policy is active but state not found
-    _HINT_MISSING = -1
-
-    def _lookup_optimal_move(self, s) -> int | None:
-        """Look up the optimal move from the serialized hint policy.
-
-        Returns the target node, ``_HINT_MISSING`` if the policy is
-        active but the state is absent, or ``None`` if hints are off.
-        Only returns a hint for Mr. X turns (int values); detective
-        entries (list values) are skipped.
-        """
-        if self.hint_policy is None:
-            return None
-
-        # Hints only apply on Mr. X's turn
-        if s.current_player != "mrx":
-            return None
-
-        det_str = ",".join(map(str, sorted(s.detective_positions)))
-        key = f"p={s.current_player}|x={s.mrx_position}|d={det_str}"
-        move = self.hint_policy.get(key)
-        if move is not None:
-            return move
-
-        return self._HINT_MISSING
 
     # ── node picking ────────────────────────────────────────────────────
 
@@ -470,15 +412,19 @@ class GameVisualizer:
         
         if self._current_player_id == "mrx":
             if self.mrx_policy is not None:
-                return self.mrx_policy.get(key)
+                move = self.mrx_policy.get(key)
+                if move is None:
+                    raise KeyError(f"No Mr. X policy entry for state {key}")
+                return move
         elif self._current_player_id is not None and self._current_player_id.startswith("detective_"):
             if self.det_policy is not None:
                 moves = self.det_policy.get(key)
-                if moves is not None:
-                    # Extract detective index from player_id (e.g., "detective_0" -> 0)
-                    det_idx = int(self._current_player_id.split("_")[1])
-                    if det_idx < len(moves):
-                        return moves[det_idx]
+                if moves is None:
+                    raise KeyError(f"No detective policy entry for state {key}")
+                # Extract detective index from player_id (e.g., "detective_0" -> 0)
+                det_idx = int(self._current_player_id.split("_")[1])
+                if det_idx < len(moves):
+                    return moves[det_idx]
         return None
 
     def _get_all_detective_policy_moves(self) -> List[int] | None:
@@ -487,7 +433,10 @@ class GameVisualizer:
             return None
         state = self.engine.state
         key = (state.mrx_position, *state.detective_positions)
-        return self.det_policy.get(key)
+        moves = self.det_policy.get(key)
+        if moves is None:
+            raise KeyError(f"No detective policy entry for state {key}")
+        return moves
 
     # ── run modes ───────────────────────────────────────────────────────
 

@@ -402,15 +402,20 @@ def main() -> None:
                 mismatches.append(
                     f"policy requires exactly {_nd} detectives, but got {len(cli_detectives)} (use --detectives)"
                 )
-            if _cli_flag_present("--max-rounds") and pol_max_rounds is not None and cli_max_rounds != pol_max_rounds:
+            # Allow --max-rounds to be <= policy's max_rounds (optimal for N rounds is also optimal for <N)
+            if _cli_flag_present("--max-rounds") and pol_max_rounds is not None and cli_max_rounds > pol_max_rounds:
                 mismatches.append(
-                    f"--max-rounds={cli_max_rounds} (policy has {pol_max_rounds})"
+                    f"--max-rounds={cli_max_rounds} exceeds policy max {pol_max_rounds}"
                 )
             if mismatches:
                 raise ValueError(
                     "Passed arguments do not match policy config: "
                     + "; ".join(mismatches)
                 )
+
+            # Use CLI max-rounds if specified and valid, otherwise use policy's
+            if _cli_flag_present("--max-rounds") and cli_max_rounds <= pol_max_rounds:
+                max_rounds = cli_max_rounds
 
             # Build per-state survival lookup
             # mrx_survival comes from --mrx-policy, det_survival from --det-policy
@@ -499,15 +504,6 @@ def main() -> None:
     # ── graphical interactive mode ─────────────────────────────────────
     from visualization.visualizer import GameVisualizer
 
-    # Build hint policy from loaded files
-    hint_policy: dict | None = None
-    if loaded_policy is not None:
-        hint_policy = dict(loaded_policy)
-    if loaded_det_policy:
-        if hint_policy is None:
-            hint_policy = {}
-        hint_policy.update(loaded_det_policy)
-
     # Use HumanStrategy for both Mr. X and detectives
     mrx_strat = HumanStrategy()
     det_strat = HumanStrategy()
@@ -519,7 +515,6 @@ def main() -> None:
         mode_label="Interactive",
         mrx_policy_label=_describe_strategy(mrx_strat),
         detective_policy_label=_describe_detective_strategies(det_strat),
-        hint_policy=hint_policy,
         guaranteed_survival=guaranteed_survival,
         survival_fn=survival_fn,
         mrx_policy=loaded_policy,
