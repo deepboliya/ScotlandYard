@@ -696,7 +696,7 @@ int main(int argc, char *argv[]) {
         if (dot_pos != string::npos) {
             map_name = map_name.substr(0, dot_pos);
         }
-        policy_out_path = map_name + "_d" + to_string(ND) + "_r" + to_string(MAX_ROUNDS) + ".bin";
+        policy_out_path = "policies/" + map_name + "_d" + to_string(ND) + "_r" + to_string(MAX_ROUNDS) + ".bin";
     }
 
     cout << "Map: " << map_path << "  (" << num_nodes << " nodes)\n";

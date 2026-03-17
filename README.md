@@ -55,10 +55,10 @@ pip install -r requirements.txt
 
 ```bash
 # Interactive play with policy files (required)
-python main.py --mrx-policy policy.bin --det-policy policy.bin
+python main.py --mrx-policy policies/full_map_d2_r15.bin --det-policy policies/full_map_d2_r15.bin
 
 # Text-only mode (no GUI)
-python main.py --mrx-policy policy.bin --det-policy policy.bin --no-viz
+python main.py --mrx-policy policies/full_map_d2_r15.bin --det-policy policies/full_map_d2_r15.bin --no-viz
 ```
 
 Both `--mrx-policy` and `--det-policy` are required. They can point to the
@@ -67,7 +67,7 @@ same `.bin` file if it contains both policies.
 ### Interactive Mode (default)
 
 ```bash
-python main.py --mrx-policy final.bin --det-policy final.bin
+python main.py --mrx-policy policies/full_map_d2_r15.bin --det-policy policies/full_map_d2_r15.bin
 ```
 
 Click green-highlighted nodes to move for either side.
@@ -77,7 +77,7 @@ Controls: **N** play best move | **Q** quit.
 ### Text-Only Mode
 
 ```bash
-python main.py --mrx-policy final.bin --det-policy final.bin --no-viz
+python main.py --mrx-policy policies/full_map_d2_r15.bin --det-policy policies/full_map_d2_r15.bin --no-viz
 ```
 
 Runs the game fully automatically using the loaded policies. No interactive
@@ -208,7 +208,13 @@ g++ -O3 -std=c++17 -pthread -o full_sweep full_sweep.cpp
 ./full_sweep --map maps/full_map.txt --num-detectives 2 --max-rounds 15 --threads 8
 ```
 
-Output file: `{map_name}_d{N}_r{R}.bin` (e.g., `full_map_d2_r15.bin`)
+Output file: `policies/{map_name}_d{N}_r{R}.bin` (e.g., `policies/full_map_d2_r15.bin`)
+
+Then play interactively:
+
+```bash
+python3 main.py --mrx-policy policies/full_map_d2_r15.bin --det-policy policies/full_map_d2_r15.bin
+```
 
 ### Options
 
