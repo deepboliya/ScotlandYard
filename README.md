@@ -51,136 +51,64 @@ pip install -r requirements.txt
 
 ## Usage
 
-### Observer Mode (watch AI play)
+### Quick Start
 
 ```bash
-python main.py
-python main.py --map first100 --mrx 13 --detectives 7 43 --max-rounds 24
+# Interactive play with policy files (required)
+python main.py --mrx-policy policy.bin --det-policy policy.bin
+
+# Text-only mode (no GUI)
+python main.py --mrx-policy policy.bin --det-policy policy.bin --no-viz
 ```
 
-Controls: **N** step | **R** round | **A** auto-play | **Q** quit.
+Both `--mrx-policy` and `--det-policy` are required. They can point to the
+same `.bin` file if it contains both policies.
 
-### Play as Mr. X
+### Interactive Mode (default)
 
 ```bash
-python main.py --mode play-mrx
+python main.py --mrx-policy final.bin --det-policy final.bin
 ```
 
-Click green-highlighted nodes to move. Detectives move automatically.
+Click green-highlighted nodes to move for either side.
 
-### Play as Detectives
-
-```bash
-# Against a stored Mr. X policy
-python main.py --mode play-detective --policy-file x13_d7_43_r24_cpp.json
-
-# Without policy file (Mr. X plays randomly)
-python main.py --mode play-detective --mrx 1 --detectives 5 10
-```
-
-Click green nodes for each detective in turn.
+Controls: **N** play best move | **Q** quit.
 
 ### Text-Only Mode
 
 ```bash
-python main.py --no-viz --policy-file x13_d7_43_r24_cpp.json
+python main.py --mrx-policy final.bin --det-policy final.bin --no-viz
 ```
+
+Runs the game fully automatically using the loaded policies. No interactive
+input is possible—both sides play optimally until the game ends.
 
 ### Solver Mode (exhaustive minimax)
 
 ```bash
-# Python solver
-python main.py --mode solve --mrx 13 --detectives 7 43 --max-rounds 24 --dump-policy
+# Single configuration (specific Mr. X and detective positions)
+g++ -O3 -std=c++17 -pthread -o fast_policy_v2_2 fast_policy_v2.2.cpp
+./fast_policy_v2_2 --map maps/first50.txt --mrx 13 --detectives 7 43 --max-rounds 10 --threads 4
 
-# C++ solver (faster)
-g++ -O2 -std=c++17 -o solve solver/solve.cpp
-./solve --map maps/first50.txt --mrx 13 --detectives 7 43 --max-rounds 24
-
-# C++ sparse policy solver (recommended default)
-g++ -O3 -std=c++17 -o fast_policy_v2 fast_policy_v2.cpp
-./fast_policy_v2 --map maps/full_map.txt --mrx 100 --detectives 1 199 --max-rounds 12 --output-format binary
-
-# C++ dense policy solver (fixed arrays, optional threading)
-g++ -O3 -std=c++17 -pthread -o fast_policy_v2_1 fast_policy_v2.1.cpp
-./fast_policy_v2_1 --map maps/first50.txt --mrx 13 --detectives 7 20 43 --max-rounds 5 --threads 4
+# Full sweep (all Mr. X starting positions)
+g++ -O3 -std=c++17 -pthread -o full_sweep full_sweep.cpp
+./full_sweep --map maps/full_map.txt --num-detectives 2 --max-rounds 15 --threads 8
 ```
 
-Both produce a JSON policy file (e.g. `x13_d7_43_r24.json` or
-`x13_d7_43_r24_cpp.json`) that can be loaded with `--policy-file`.
-
-Dense solver notes:
-
-- `fast_policy_v2.1.cpp` supports detective counts from 1 to 5.
-- It uses a dense fixed-size state table, so memory grows quickly with
-  map size, rounds, and number of detectives.
-- If the dense table would be too large, it exits with an error; use
-  `fast_policy_v2.cpp` for larger configurations.
-
-### Hint Overlay
-
-```bash
-python main.py --mode play-mrx --policy-file x13_d7_43_r24_cpp.json --help-human
-```
-
-Highlights the solver-optimal move in light yellow while you play.
+See [C++ Solver Variants](#c-solver-variants) and [Full Sweep](#full-sweep) for details.
 
 ## CLI Reference
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--mode` | `auto` | `auto`, `play-mrx`, `play-detective`, `solve` |
+| `--mrx-policy` | — | **Required.** Mr. X policy `.bin` file |
+| `--det-policy` | — | **Required.** Detective policy `.bin` file |
 | `--map` | `first50` | Map name in `maps/` (without `.txt`) |
 | `--mrx` | `1` | Mr. X starting node |
 | `--detectives` | `5 10` | Detective starting nodes |
 | `--max-rounds` | `15` | Rounds before Mr. X wins |
 | `--seed` | — | Random seed for reproducibility |
 | `--no-viz` | — | Text-only mode (no GUI) |
-| `--dump-policy` | — | Write solver output to JSON |
-| `--policy-file` | — | Load policy + config from JSON |
-| `--help-human` | — | Highlight optimal moves (requires `--policy-file`) |
-
-## Policy JSON Format
-
-Policy files (`scotlandyard-policy-v2`) contain everything needed to
-replay or analyse a solved configuration:
-
-```json
-{
-  "format": "scotlandyard-policy-v2",
-  "board": "maps/first50.txt",
-  "config": {
-    "mrx_start": 13,
-    "detective_starts": [7, 43],
-    "max_rounds": 24
-  },
-  "policy": {
-    "r=0|p=mrx|x=13|d=7,43": 4
-  },
-  "detective_policy": {
-    "r=1|p=detectives|x=4|d=7,43": [6, 18]
-  },
-  "survival_depths": {
-    "r=0|p=mrx|x=13|d=7,43": 10
-  },
-  "solver": {
-    "forced_escape": false,
-    "guaranteed_survival_depth": 10,
-    "states_evaluated": 1873613,
-    "policy_size": 949405,
-    "detective_policy_size": 858086,
-    "survival_depths_size": 1873613,
-    "solve_time_seconds": 5.07
-  }
-}
-```
-
-- **`policy`**: maps each Mr. X state to the optimal next node.
-- **`detective_policy`**: maps each detective state to a list of target nodes.
-- **`survival_depths`**: maps every visited state to the guaranteed survival
-  depth (the round at which Mr. X is caught under optimal play, or
-  `max_rounds` if he escapes). Loaded by the visualiser and move logger
-  to display `SD=10(+9)` annotations without re-running the solver.
-- When `--policy-file` is used, `config` overrides `--mrx`/`--detectives`/`--max-rounds`.
 
 ## Solver Details
 
@@ -209,20 +137,88 @@ Minimax over the full game tree with memoisation:
 - `Forced escape: NO` → detectives can always catch Mr. X; policy
   maximises survival depth as a best-effort fallback.
 
-## Adding a Custom Strategy
+## C++ Solver Variants
 
-```python
-from strategies.base import Strategy
+Three solver implementations are provided, each with different trade-offs:
 
-class MyStrategy(Strategy):
-    def choose_move(self, board, state, player_id, valid_moves):
-        return best_node
+| Solver | Memo Strategy | Threading | Best For |
+|--------|---------------|-----------|----------|
+| `fast_policy_v2.cpp` | Hash map (`unordered_map`) | No | Large state spaces, memory-constrained |
+| `fast_policy_v2.1.cpp` | Dense array (atomics) | Yes | Fast solves, moderate state spaces |
+| `fast_policy_v2.2.cpp` | Dense array (packed atomics) | Yes | Thread-safe, fixes v2.1 data race |
+
+### fast_policy_v2.cpp (Sparse)
+
+Uses `unordered_map` for memoization. State keys are packed into `uint64_t`
+(8 bits per position + 1 bit for turn). Round number is **not** part of
+the key—values represent "rounds Mr. X can survive from this position."
+
+```bash
+g++ -O3 -std=c++17 -o fast_policy_v2 fast_policy_v2.cpp
+./fast_policy_v2 --map maps/full_map.txt --mrx 100 --detectives 1 199 --max-rounds 12
 ```
 
-Wire it into the engine:
+**Pros:** Lower memory for sparse state spaces, no size limits.
+**Cons:** Single-threaded, hash overhead.
 
-```python
-engine = GameEngine(board, state,
-                    mrx_strategy=MyStrategy(),
-                    detective_strategy=MyStrategy())
+### fast_policy_v2.1.cpp (Dense, Multi-threaded)
+
+Uses fixed-size arrays indexed by `(depth_left, is_x_turn, x_pos, det_tuple)`.
+Supports up to 5 detectives. Thread-safe via atomics (no mutexes).
+
+```bash
+g++ -O3 -std=c++17 -pthread -o fast_policy_v2_1 fast_policy_v2.1.cpp
+./fast_policy_v2_1 --map maps/first50.txt --mrx 13 --detectives 7 20 43 --max-rounds 10 --threads 4
 ```
+
+**Pros:** Much faster with threading, cache-friendly dense arrays.
+**Cons:** Memory grows with `O(rounds × nodes × C(nodes+dets, dets))`;
+exits if table exceeds 600M states.
+
+### fast_policy_v2.2.cpp (Dense, Thread-Safe Fix)
+ 
+Same as v2.1 but packs `memo_state`, `memo_value`, and `memo_depth_used`
+into a single `atomic<uint32_t>` to eliminate a data race during
+concurrent re-evaluations.
+
+```bash
+g++ -O3 -std=c++17 -pthread -o fast_policy_v2_2 fast_policy_v2.2.cpp
+./fast_policy_v2_2 --map maps/first50.txt --mrx 13 --detectives 7 20 43 --max-rounds 10 --threads 8
+```
+
+**Recommended** for multi-threaded solves.
+
+## Full Sweep
+
+`full_sweep.cpp` exhaustively solves the game from **every possible Mr. X
+starting position** against a fixed number of detectives. Unlike the
+single-configuration solvers, it computes optimal play for all `N` starting
+nodes in one run.
+
+Based on `fast_policy_v2.2.cpp` with these differences:
+- Iterates over all Mr. X starting positions automatically
+- Drops `depth_used` from memo (pure iterative sweep)
+- Displays a live progress bar tracking computed states
+- Outputs a single `.bin` policy file covering all starting positions
+
+### Usage
+
+```bash
+g++ -O3 -std=c++17 -pthread -o full_sweep full_sweep.cpp
+./full_sweep --map maps/full_map.txt --num-detectives 2 --max-rounds 15 --threads 8
+```
+
+Output file: `{map_name}_d{N}_r{R}.bin` (e.g., `full_map_d2_r15.bin`)
+
+### Options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--map` | — | Map file path |
+| `--num-detectives` | `2` | Number of detectives (1–5) |
+| `--max-rounds` | `11` | Maximum rounds |
+| `--threads` | `1` | Worker threads |
+| `--policy-file` | auto | Custom output path |
+
+The resulting policy file can be used with `main.py` for any Mr. X starting
+position on that map.
